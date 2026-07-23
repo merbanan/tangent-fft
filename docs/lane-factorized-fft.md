@@ -129,22 +129,18 @@ The 16- and 32-point paths retain the whole decomposition in the AVX2
 register file. The 32-point path holds the eight rows from its vector FFT8 and
 feeds them directly to two fused finish blocks.
 
-For larger even-log inner transforms, four FFT4 children and their first
-radix-4 parent form one straight-line vector FFT16 leaf. GCC carries most rows
-in registers and emits three short-lived stack spills instead of a full
-16-row work-array store/reload round trip. Odd-log transforms store three FFT8
-children, retain the fourth child's eight rows, and consume those rows
-directly in the FFT32 parent.
-
-The fixed 64- and 128-point paths carry completed child rows further into the
-final transpose/butterfly. Hot entry points are explicitly aligned so adding
-fixed codelets cannot accidentally move the general loop onto a poor
-instruction-fetch boundary.
+Larger transforms use uniform assembly FFT4/FFT8 leaves followed by
+block-major stages. The superseded intrinsic champion also tried fused
+FFT16/FFT32 parents and fixed 64/128 paths. Those saved one small work-array
+boundary but substantially enlarged the code. The all-assembly rewrite keeps
+the regular schedule; it matches the old path at several sizes and is about
+2--4% slower at 1024, 4096, and 8192 on the development host.
 
 ## Prototype progression
 
-The retained experiment in `analysis/lane4_experiment.c` records the useful
-failures as well as the successful path:
+The original intrinsic-based experiment recorded the useful failures as well
+as the successful path. It was removed when the production path became
+handwritten assembly; the measurements and conclusions are retained here:
 
 1. lane-factorized radix-2 proved the layout and DFT identity, but its
    cache-unfriendly full-array passes became very slow at 8192;
@@ -155,9 +151,9 @@ failures as well as the successful path:
 6. column-major factors removed the always-trivial `r=0` multiply;
 7. stage-major twiddles and two-way unrolling removed upper-loop address and
    control overhead;
-8. FFT16/FFT32 parent fusion carried register rows across the first work
-   boundary;
-9. fixed 64/128 paths carried rows into the final transform.
+8. the earlier intrinsic champion tested FFT16/FFT32 parent fusion and fixed
+   64/128 paths; these remain historical optimization data rather than code
+   in the intrinsic-free assembly path.
 
 This progression is important: merely putting a conventional iterative
 radix-2 FFT in YMM registers was not sufficient. The memory traversal and the
@@ -179,15 +175,10 @@ Several plausible variants were measured and rejected:
 
 ## Cycle results
 
-Command:
-
-```sh
-make lane4-experiment
-```
-
-The harness pins execution to CPU 2, warms each routine, measures 31
-serialized-TSC batches, and reports the median cycles per transform. These
-results were measured on an AMD Ryzen 9 3900X with GCC 15.2.0:
+The original experiment pinned execution to CPU 2, warmed each routine,
+measured 31 serialized-TSC batches, and reported the median cycles per
+transform. These archived results were measured on an AMD Ryzen 9 3900X with
+GCC 15.2.0:
 
 | N | lane4-avx2-fma | tangent-x86-asm | FFmpeg AVTX | vs tangent | vs FFmpeg |
 |---:|---:|---:|---:|---:|---:|

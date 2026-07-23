@@ -18,8 +18,7 @@ entries, each supporting forward and normalized inverse transforms:
 - `lane8-avx2-fma`, a handwritten-assembly `N=8M` decomposition with eight
   split-complex residue transforms per YMM pair;
 - `hw-sse-auto`, a measured lane2/lane4 SSE assembly crossover dispatcher;
-- lane4 kernels for AVX,
-  AVX+FMA, AVX2, and AVX2+FMA;
+- handwritten lane4 assembly kernels for AVX, AVX+FMA, AVX2, and AVX2+FMA;
 - FFmpeg `libavutil` AVTX, built locally from pinned source, in both native
   auto-dispatch and reproducible SSE4.2-and-below configurations.
 
@@ -45,7 +44,6 @@ make bench
 make ffmpeg-cycles
 make tangent-cycles
 make lane2-cycles
-make lane4-experiment
 make lane8-profile
 ```
 
@@ -100,8 +98,9 @@ computes the four length-`M` transforms from `x[4m+r]` simultaneously. Its
 mixed-radix input permutation is fused into FFT4/FFT8 leaves, upper stages are
 block-major radix-4, and the final twiddles feed a fused 4x4 transpose plus
 vector FFT4. Complete 16- and 32-point transforms stay in registers.
-Fused vector FFT16 leaves and fixed 64/128 paths carry child rows across
-work-array boundaries.
+Scalar C is restricted to allocation, permutation, and float coefficient
+generation; all AVX execution is handwritten NASM. The first-party tree uses
+no compiler SIMD or timestamp intrinsics.
 
 This schedule prioritizes regular full-width SIMD and memory locality over
 minimum scalar operation count. On this host it beats tangent assembly and

@@ -403,14 +403,10 @@ prototype.
 
 - `N=16`: the complete inner FFT4 and final FFT4 remain in registers.
 - `N=32`: a complete vector FFT8 feeds two finish groups directly.
-- `N=64`: two completed frequency bands are carried into the finish without
-  a work-array round trip.
-- `N=128`: the first eight completed frequency rows are similarly carried
-  into the finish.
 
-The general execution entry is aligned to 64 bytes so adding fixed codelets
-does not accidentally move its main loop onto an unfavorable instruction
-fetch boundary.
+Larger transforms use the uniform assembly leaf/stage/finish pipeline. The
+earlier intrinsic implementation tested fixed 64/128 codelets, but they are
+not retained in the intrinsic-free source.
 
 ## 7. Mapping complex arithmetic to x86
 

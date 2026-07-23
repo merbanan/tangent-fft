@@ -14,7 +14,7 @@ HOST_ARCH := $(shell uname -m)
 ifeq ($(HOST_ARCH),x86_64)
 CPPFLAGS += -DHAVE_TANGENT_X86_ASM=1
 LANE4_X86_OBJECTS := lane4_avx.o lane4_avx_fma.o \
-	lane4_avx2.o lane4_fft.o lane4_sse_stage.o
+	lane4_avx2.o lane4_fft.o lane4_sse_stage.o lane4_avx_stage.o
 LANE2_X86_OBJECTS := lane2_sse.o lane2_sse_stage.o
 CORE_OBJECTS += tangent_x86_kernel.o tangent_sse_stage.o \
 	$(LANE4_X86_OBJECTS) $(LANE2_X86_OBJECTS) lane8_avx.o lane8_avx_stage.o
@@ -27,7 +27,7 @@ endif
 CPPFLAGS += -I. -Ithird_party/ffmpeg -I.ffmpeg-build
 
 .PHONY: all clean test bench debug ffmpeg ffmpeg-cycles tangent-cycles \
-	lane2-cycles lane4-experiment lane8-profile
+	lane2-cycles lane8-profile
 .NOTPARALLEL: debug
 
 all: $(TARGET)
@@ -57,21 +57,24 @@ lane8_avx_stage.o: lane8_avx.asm \
 		-P.ffmpeg-build/config.asm -o $@ $<
 
 lane4_fft.o: lane4_fft.c lane4_fft.h fft.h
-	$(CC) $(CFLAGS) $(CPPFLAGS) -mavx2 -mfma -c -o $@ $<
+	$(CC) $(CFLAGS) $(CPPFLAGS) -fno-tree-vectorize -c -o $@ $<
 
 lane4_avx.o: lane4_fft.c lane4_fft.h fft.h
-	$(CC) $(CFLAGS) $(CPPFLAGS) -mavx -mno-avx2 -mno-fma \
+	$(CC) $(CFLAGS) $(CPPFLAGS) -fno-tree-vectorize \
 		-DLANE4_BUILD_AVX=1 -c -o $@ $<
 
 lane4_avx_fma.o: lane4_fft.c lane4_fft.h fft.h
-	$(CC) $(CFLAGS) $(CPPFLAGS) -mavx -mno-avx2 -mfma \
+	$(CC) $(CFLAGS) $(CPPFLAGS) -fno-tree-vectorize \
 		-DLANE4_BUILD_AVX_FMA=1 -c -o $@ $<
 
 lane4_avx2.o: lane4_fft.c lane4_fft.h fft.h
-	$(CC) $(CFLAGS) $(CPPFLAGS) -mavx2 -mno-fma \
+	$(CC) $(CFLAGS) $(CPPFLAGS) -fno-tree-vectorize \
 		-DLANE4_BUILD_AVX2=1 -c -o $@ $<
 
 tangent_x86_kernel.o: tangent_x86_kernel.asm
+	$(NASM) -f elf64 -g -F dwarf -o $@ $<
+
+lane4_avx_stage.o: lane4_avx.asm
 	$(NASM) -f elf64 -g -F dwarf -o $@ $<
 
 tangent_sse_stage.o: tangent_sse_stage.asm
@@ -108,27 +111,26 @@ tangent-cycles: analysis/tangent_cycles
 lane2-cycles: analysis/lane2_cycles
 	taskset -c 2 ./analysis/lane2_cycles
 
-analysis/tangent_cycles: analysis/tangent_cycles.c $(CORE_OBJECTS) $(FFMPEG_LIB)
-	$(CC) $(CFLAGS) $(CPPFLAGS) $(LDFLAGS) -o $@ $< $(CORE_OBJECTS) \
-		$(FFMPEG_LIB) $(LDLIBS)
+analysis/x86_tsc.o: analysis/x86_tsc.asm
+	$(NASM) -f elf64 -g -F dwarf -o $@ $<
 
-analysis/lane2_cycles: analysis/lane2_cycles.c $(CORE_OBJECTS) $(FFMPEG_LIB)
+analysis/tangent_cycles: analysis/tangent_cycles.c analysis/x86_tsc.o \
+	$(CORE_OBJECTS) $(FFMPEG_LIB)
 	$(CC) $(CFLAGS) $(CPPFLAGS) $(LDFLAGS) -o $@ $< $(CORE_OBJECTS) \
-		$(FFMPEG_LIB) $(LDLIBS)
+		analysis/x86_tsc.o $(FFMPEG_LIB) $(LDLIBS)
 
-analysis/ffmpeg_cycles: analysis/ffmpeg_cycles.c ffmpeg_fft.o $(FFMPEG_LIB)
+analysis/lane2_cycles: analysis/lane2_cycles.c analysis/x86_tsc.o \
+	$(CORE_OBJECTS) $(FFMPEG_LIB)
+	$(CC) $(CFLAGS) $(CPPFLAGS) $(LDFLAGS) -o $@ $< $(CORE_OBJECTS) \
+		analysis/x86_tsc.o $(FFMPEG_LIB) $(LDLIBS)
+
+analysis/ffmpeg_cycles: analysis/ffmpeg_cycles.c analysis/x86_tsc.o \
+	ffmpeg_fft.o $(FFMPEG_LIB)
 	$(CC) $(CFLAGS) $(CPPFLAGS) $(LDFLAGS) -o $@ $< ffmpeg_fft.o \
-		$(FFMPEG_LIB) $(LDLIBS)
-
-lane4-experiment: analysis/lane4_experiment
-	taskset -c 2 ./analysis/lane4_experiment
+		analysis/x86_tsc.o $(FFMPEG_LIB) $(LDLIBS)
 
 lane8-profile: analysis/lane8_profile
 	taskset -c 2 ./analysis/lane8_profile
-
-analysis/lane4_experiment: analysis/lane4_experiment.c $(CORE_OBJECTS) $(FFMPEG_LIB)
-	$(CC) $(CFLAGS) $(CPPFLAGS) -mavx2 -mfma $(LDFLAGS) -o $@ $< \
-		$(CORE_OBJECTS) $(FFMPEG_LIB) $(LDLIBS)
 
 analysis/lane8_profile: analysis/lane8_profile.c lane8_avx.o lane8_avx_stage.o
 	$(CC) $(CFLAGS) $(CPPFLAGS) $(LDFLAGS) -o $@ $< \
@@ -142,7 +144,7 @@ debug: clean $(TARGET)
 clean:
 	$(RM) $(TARGET) $(OBJECTS) analysis/ffmpeg_cycles \
 		analysis/tangent_cycles analysis/lane2_cycles \
-		analysis/lane4_experiment \
+		analysis/x86_tsc.o \
 		analysis/lane8_profile \
 		lane4_sse.o lane4_sse2.o \
 		lane4_sse3.o lane4_ssse3.o lane4_sse41.o lane4_sse42.o

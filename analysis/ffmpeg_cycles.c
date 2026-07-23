@@ -1,9 +1,9 @@
 #include "ffmpeg_fft.h"
+#include "analysis/x86_tsc.h"
 
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <x86intrin.h>
 
 enum { SAMPLE_COUNT = 31 };
 
@@ -14,20 +14,6 @@ static int compare_u64(const void *left, const void *right)
     const uint64_t a = *(const uint64_t *)left;
     const uint64_t b = *(const uint64_t *)right;
     return (a > b) - (a < b);
-}
-
-static uint64_t read_tsc_start(void)
-{
-    _mm_lfence();
-    return __rdtsc();
-}
-
-static uint64_t read_tsc_end(void)
-{
-    unsigned auxiliary;
-    const uint64_t value = __rdtscp(&auxiliary);
-    _mm_lfence();
-    return value;
 }
 
 int main(int argc, char **argv)
@@ -87,11 +73,11 @@ int main(int argc, char **argv)
 
         for (sample = 0; sample < SAMPLE_COUNT; ++sample) {
             size_t iteration;
-            const uint64_t start = read_tsc_start();
+            const uint64_t start = x86_tsc_start();
             for (iteration = 0; iteration < iterations; ++iteration) {
                 (void)ffmpeg_fft_execute(plan, data);
             }
-            samples[sample] = read_tsc_end() - start;
+            samples[sample] = x86_tsc_end() - start;
         }
 
         qsort(samples, SAMPLE_COUNT, sizeof(*samples), compare_u64);
