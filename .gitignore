@@ -1,0 +1,4 @@
+*.o
+fft_harness
+.ffmpeg-build/
+.ffmpeg-tools/
