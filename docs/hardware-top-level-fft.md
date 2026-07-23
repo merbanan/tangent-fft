@@ -117,6 +117,14 @@ the measured small-size crossover. `hw-sse-auto` therefore dispatches:
 N >= 128:      lane4-sse
 ```
 
+The retained lane2 upper stage now issues the three independent complex
+rotations through three XMM scratch registers before reusing those registers
+for the radix-4 outputs. This changes neither arithmetic nor table traffic,
+but removes the artificial dependency created by reusing one scratch
+register for all three rotations. It is a handwritten SSE1 schedule; later
+SSE API variants share it because they add no primitive needed by this
+kernel.
+
 The split SSE generic rotation uses four `mulps` and two `addps/subps`
 instructions for four complex values, exactly the direct-form scalar
 multiplication/addition count lifted into XMM. SSE has no FMA with which to

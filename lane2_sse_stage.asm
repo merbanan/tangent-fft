@@ -115,6 +115,28 @@ mangle(lane2_sse_execute):
     addps %1, %3
 %endmacro
 
+; Rotate all three nonzero radix-4 legs together. m4-m6 carry independent
+; swapped values until the multiplies complete, then become the radix-4
+; output scratch registers. This breaks the loop-carried m8 dependency of
+; three consecutive COMPLEX_MULTIPLY expansions without adding spills.
+%macro COMPLEX_MULTIPLY_THREE 1
+    movaps m4, m1
+    movaps m5, m2
+    movaps m6, m3
+    shufps m4, m4, 0xb1
+    shufps m5, m5, 0xb1
+    shufps m6, m6, 0xb1
+    mulps m1, [%1 + 0]
+    mulps m2, [%1 + 32]
+    mulps m3, [%1 + 64]
+    mulps m4, [%1 + 16]
+    mulps m5, [%1 + 48]
+    mulps m6, [%1 + 80]
+    addps m1, m4
+    addps m2, m5
+    addps m3, m6
+%endmacro
+
 ; Forward FFT4 over four vectors, followed by pointer stores.
 ; Inputs are m0=a, m1=b, m2=c, m3=d.
 %macro RADIX4_STORE_POINTERS 4
@@ -297,9 +319,7 @@ cglobal sse_base4, 4, 7, 8, data, permutation, work, count, index, input, a
 
 %macro STAGE_GENERAL_BUTTERFLY 0
     LOAD_POINTER_ROWS
-    COMPLEX_MULTIPLY m1, rootsq, m8
-    COMPLEX_MULTIPLY m2, rootsq + 32, m8
-    COMPLEX_MULTIPLY m3, rootsq + 64, m8
+    COMPLEX_MULTIPLY_THREE rootsq
     RADIX4_STORE_POINTERS workq, p1q, p2q, p3q
     add rootsq, 96
     ADVANCE_POINTER_ROWS

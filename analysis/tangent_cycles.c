@@ -63,6 +63,10 @@ int main(int argc, char **argv)
     unsigned last_power = 13;
     unsigned power;
     const fft_algorithm algorithms[] = {
+        FFT_LANE4_AVX2_FMA,
+        FFT_LANE2_SSE,
+        FFT_LANE4_SSE,
+        FFT_HW_SSE,
         FFT_TANGENT_X86_ASM,
         FFT_TANGENT_SSE,
         FFT_TANGENT_SSE3,

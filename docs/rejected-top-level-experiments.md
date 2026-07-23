@@ -50,6 +50,85 @@ register schedule also left less freedom than the four-row radix-4 kernel.
 No intrinsic version of this experiment is retained; the production research
 continued directly in NASM.
 
+### Full-assembly retry with compact roots
+
+A second implementation made the radix-8 pass entirely FFmpeg-style NASM
+and combined it with the compact-root representation described below. It was
+correct for forward and inverse transforms through the full cross-check
+range, but the result was worse than the earlier prototype:
+
+| N | production lane4 cycles | assembly radix-8 cycles | penalty |
+|---:|---:|---:|---:|
+| 128 | 267 | 336 | 26% |
+| 256 | 591 | 701 | 19% |
+| 512 | 1,324 | 1,562 | 18% |
+| 1024 | 2,856 | 3,755 | 31% |
+| 2048 | 6,650 | 8,068 | 21% |
+| 4096 | 15,109 | 18,822 | 25% |
+| 8192 | 35,886 | 45,316 | 26% |
+
+The pass does remove a work-array traversal when the exponent admits the
+factorization. However, seven twiddle chains must coexist with the
+register-resident FFT8. On Zen 2 that lengthens the critical path and raises
+shuffle/load-port pressure more than the eliminated traversal saves.
+
+## Lower-bound AoS rotation with expanded coefficients
+
+The most promising AVX retry preserved the production lane4 interleaved
+layout and changed each common coefficient to replicated vectors. A generic
+rotation then reached the direct AoS/FMA instruction bound:
+
+```text
+vpermilps       swapped, value, 0xb1
+vmulps          swapped, signed_im
+vfmaddps        value, value, real, swapped
+```
+
+This is three vector arithmetic instructions and no representation
+conversion, versus two broadcasts plus three arithmetic instructions in the
+production compiler output. The complete execution path, including FFT4/FFT8
+leaves, stages, transpose, final FFT4, and stores, was handwritten NASM.
+
+The first 64-byte coefficient record tied near 512 but lost at larger sizes
+because the last-stage table no longer fit in L1. A compact 36-byte record
+kept one signed-imaginary vector and one scalar real component, requiring one
+broadcast and four instructions. Three rotations were dependency-balanced
+across independent YMM registers, and the first FFT4 parent was fused with
+its leaves.
+
+Five serialized-TSC runs showed no retained crossover:
+
+| N | production lane4 cycles | compact-root assembly cycles |
+|---:|---:|---:|
+| 16 | 52 | 54 |
+| 32 | 72 | 76 |
+| 64 | 128 | 149 |
+| 128 | 267 | 285 |
+| 256 | 588 | 648 |
+| 512 | 1,316 | 1,354 |
+| 1024 | 2,875 | 3,094 |
+| 2048 | 6,649 | 6,655 |
+| 4096 | 14,968 | 16,677 |
+| 8192 | 35,904 | 37,480 |
+
+The lesson is that a local instruction lower bound is insufficient when it
+requires a larger coefficient stream. The production loop's compact
+24-byte triplet and two-butterfly compiler scheduling win globally.
+
+## Production-stage assembly and exact midpoint
+
+Two attempts operated directly on the winning production representation:
+
+1. a dependency-balanced assembly radix-4 stage consuming the compact scalar
+   triplet table;
+2. a C/AVX exact-root specialization for the one `k=previous/2` butterfly in
+   every block (`W8`, `-i`, `W8^3`).
+
+Both were correct. The assembly stage regressed roughly 2--4%. The midpoint
+specialization saved seven vector operations at that butterfly but split the
+compiler's paired hot loops; the complete transform regressed roughly
+0.3--2.6%. Neither change is retained.
+
 ## Four-frequency lane8 finalizer
 
 The first lane8 assembly finalizer used the 256-bit representation for the
