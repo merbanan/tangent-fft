@@ -161,6 +161,9 @@ static int check_vector(size_t n,
             3.0e-6 * fmax(1.0, (double)(n > 1 ? log2((double)n) : 1.0));
         double error;
 
+        if (!fft_plan_supports(plan, selected)) {
+            continue;
+        }
         memcpy(work, input, n * sizeof(*work));
         if (fft_execute(plan, selected, work) != 0) {
             fprintf(stderr,

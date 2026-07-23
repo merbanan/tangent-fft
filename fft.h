@@ -14,8 +14,9 @@ typedef enum {
     FFT_SPLIT_RADIX = 1,
     FFT_TANGENT = 2,
     FFT_TANGENT_X86_ASM = 3,
-    FFT_FFMPEG = 4,
-    FFT_ALGORITHM_COUNT = 5
+    FFT_LANE4_RADIX4 = 4,
+    FFT_FFMPEG = 5,
+    FFT_ALGORITHM_COUNT = 6
 } fft_algorithm;
 
 typedef struct fft_plan fft_plan;

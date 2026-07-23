@@ -1,5 +1,6 @@
 *.o
 fft_harness
 analysis/ffmpeg_cycles
+analysis/lane4_experiment
 .ffmpeg-build/
 .ffmpeg-tools/

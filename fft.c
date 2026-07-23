@@ -1,6 +1,7 @@
 #include "fft.h"
 #include "ffmpeg_fft.h"
 #if HAVE_TANGENT_X86_ASM
+#include "lane4_fft.h"
 #include "tangent_x86_asm.h"
 #endif
 
@@ -83,6 +84,9 @@ struct fft_plan {
 
     fft_complex *scratch;
     ffmpeg_fft_plan *ffmpeg;
+#if HAVE_TANGENT_X86_ASM
+    lane4_fft_plan *lane4;
+#endif
     uint32_t *tangent_permutation;
     uint32_t **blocked_permutation;
     uint32_t *tangent_bases;
@@ -966,9 +970,18 @@ fft_plan *fft_plan_create(size_t n)
         ((n * sizeof(*plan->scratch) + 63) / 64) * 64);
     if (n <= 131072) {
         plan->ffmpeg = ffmpeg_fft_plan_create(n);
+#if HAVE_TANGENT_X86_ASM
+        if (n >= 16 && plan->tangent_x86_asm_available) {
+            plan->lane4 = lane4_fft_plan_create(n);
+        }
+#endif
     }
     if (plan->scratch == NULL ||
         (n <= 131072 && plan->ffmpeg == NULL) ||
+#if HAVE_TANGENT_X86_ASM
+        (n >= 16 && n <= 131072 &&
+         plan->tangent_x86_asm_available && plan->lane4 == NULL) ||
+#endif
         !create_scale_tables(plan) ||
         !create_transform_tables(plan) ||
         !create_x86_leaf_tables(plan) ||
@@ -988,6 +1001,9 @@ void fft_plan_destroy(fft_plan *plan)
 
     free(plan->scratch);
     ffmpeg_fft_plan_destroy(plan->ffmpeg);
+#if HAVE_TANGENT_X86_ASM
+    lane4_fft_plan_destroy(plan->lane4);
+#endif
     free_float_table(plan->scale, plan->table_levels);
     free_constant_table(plan->root, plan->table_levels);
     free_complex_table(plan->scaled_twiddle, plan->table_levels);
@@ -1039,6 +1055,13 @@ int fft_plan_supports(const fft_plan *plan, fft_algorithm algorithm)
     }
     if (algorithm == FFT_TANGENT_X86_ASM) {
         return plan->tangent_x86_asm_available;
+    }
+    if (algorithm == FFT_LANE4_RADIX4) {
+#if HAVE_TANGENT_X86_ASM
+        return plan->lane4 != NULL;
+#else
+        return 0;
+#endif
     }
     return algorithm >= FFT_RADIX2 && algorithm < FFT_ALGORITHM_COUNT;
 }
@@ -2065,6 +2088,12 @@ int fft_execute(fft_plan *plan, fft_algorithm algorithm, fft_complex *data)
         }
         tangent_fft_scheduled(plan, data, 1);
         return 0;
+    case FFT_LANE4_RADIX4:
+#if HAVE_TANGENT_X86_ASM
+        return lane4_fft_execute(plan->lane4, data);
+#else
+        return -1;
+#endif
     case FFT_FFMPEG:
         return plan->ffmpeg == NULL
                    ? -1
@@ -2085,6 +2114,8 @@ const char *fft_algorithm_name(fft_algorithm algorithm)
         return "tangent";
     case FFT_TANGENT_X86_ASM:
         return "tangent-x86-asm";
+    case FFT_LANE4_RADIX4:
+        return "lane4-radix4";
     case FFT_FFMPEG:
         return "ffmpeg-avtx";
     default:
@@ -2097,7 +2128,7 @@ uint64_t fft_theoretical_flops(fft_algorithm algorithm, size_t n)
     const unsigned log_n = integer_log2(n);
     int64_t result;
 
-    if (algorithm == FFT_FFMPEG) {
+    if (algorithm == FFT_FFMPEG || algorithm == FFT_LANE4_RADIX4) {
         return 0;
     }
     if (!is_power_of_two(n) || n == 1) {
@@ -2124,6 +2155,7 @@ uint64_t fft_theoretical_flops(fft_algorithm algorithm, size_t n)
         result = numerator / 27;
         break;
     }
+    case FFT_LANE4_RADIX4:
     case FFT_FFMPEG:
         return 0;
     default:

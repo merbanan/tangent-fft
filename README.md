@@ -1,11 +1,12 @@
 # Tangent FFT comparison
 
-This repository contains five single-precision, forward, complex FFT paths:
+This repository contains six single-precision, forward, complex FFT paths:
 
 - iterative radix-2 Cooley–Tukey in C;
 - recursive conjugate-pair split-radix in C;
 - a planned, non-recursive tangent FFT in C;
 - `tangent-x86-asm`, an AVX2/FMA tangent FFT for x86-64;
+- `lane4-radix4`, an AVX2/FMA lane-factorized radix-4 FFT;
 - FFmpeg `libavutil` AVTX, built locally from pinned source.
 
 Every algorithm uses `float` samples, coefficients, twiddles, and scale
@@ -22,6 +23,7 @@ make
 make test
 make bench
 make ffmpeg-cycles
+make lane4-experiment
 ```
 
 The repository includes the pinned FFmpeg source. The build produces a local
@@ -47,6 +49,20 @@ results to the console and can also write CSV.
 
 `tangent-x86-asm` is enabled when the host is x86-64 with AVX2 and FMA.
 Portable C algorithms remain available on other targets.
+
+## Lane-factorized AVX2 implementation
+
+For `N=4M`, `lane4-radix4` treats each YMM register as four complex lanes and
+computes the four length-`M` transforms from `x[4m+r]` simultaneously. Its
+mixed-radix input permutation is fused into FFT4/FFT8 leaves, upper stages are
+block-major radix-4, and the final twiddles feed a fused 4x4 transpose plus
+vector FFT4. Complete 16- and 32-point transforms stay in registers.
+
+This schedule prioritizes regular full-width SIMD and memory locality over
+minimum scalar operation count. On this host it beats tangent assembly and
+FFmpeg at every tested power of two from 16 through 8192. The derivation,
+prototype history, cycle results, limitations, and research references are in
+[`docs/lane-factorized-fft.md`](docs/lane-factorized-fft.md).
 
 ## Tangent implementation structure
 
@@ -108,23 +124,20 @@ The checked-in `benchmark.csv` comes from:
 
 Median execution times in microseconds:
 
-| N | radix-2 | tangent C | tangent-x86-asm | FFmpeg AVTX |
-|---:|---:|---:|---:|---:|
-| 16 | 0.110 | 0.090 | 0.050 | 0.050 |
-| 32 | 0.230 | 0.180 | 0.050 | 0.060 |
-| 64 | 0.550 | 0.420 | 0.080 | 0.100 |
-| 128 | 1.250 | 0.840 | 0.200 | 0.170 |
-| 256 | 2.780 | 1.820 | 0.380 | 0.340 |
-| 512 | 6.100 | 3.830 | 0.720 | 0.690 |
-| 1024 | 13.280 | 8.290 | 1.490 | 1.470 |
-| 2048 | 28.660 | 17.610 | 3.090 | 3.230 |
-| 4096 | 61.631 | 37.990 | 6.990 | 7.550 |
-| 8192 | 136.390 | 85.870 | 18.460 | 21.380 |
+| N | radix-2 | tangent C | tangent-x86-asm | lane4-radix4 | FFmpeg AVTX |
+|---:|---:|---:|---:|---:|---:|
+| 16 | 0.130 | 0.110 | 0.060 | 0.030 | 0.060 |
+| 32 | 0.290 | 0.230 | 0.060 | 0.050 | 0.070 |
+| 64 | 0.670 | 0.530 | 0.100 | 0.080 | 0.120 |
+| 128 | 1.550 | 1.060 | 0.240 | 0.130 | 0.200 |
+| 256 | 3.420 | 2.280 | 0.440 | 0.280 | 0.420 |
+| 512 | 7.520 | 4.790 | 0.870 | 0.560 | 0.850 |
+| 1024 | 16.330 | 10.290 | 1.770 | 1.290 | 1.820 |
+| 2048 | 28.540 | 17.540 | 3.070 | 2.150 | 3.190 |
+| 4096 | 61.120 | 37.940 | 6.940 | 5.290 | 7.540 |
+| 8192 | 134.251 | 85.721 | 18.320 | 11.670 | 21.410 |
 
-The assembly tangent path is faster than radix-2 at every listed size. Against
-FFmpeg it wins at 32, 64, and 2048–8192, ties at 16 within timer resolution,
-and is 1–18% behind at 128–1024. At the most important upper end, it is about
-14% faster than FFmpeg at 8192.
+Cycle-accurate comparisons are recorded in the lane-factorized report.
 
 The vendored FFmpeg FMA3 split-radix leaves are also patched with exact
 sign-folding reductions. A five-pair cycle A/B against the unmodified pinned
