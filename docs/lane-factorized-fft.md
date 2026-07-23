@@ -77,7 +77,10 @@ a separate permutation copy and a separate first-stage work-array pass.
 
 All upper inner stages are ordinary radix-4 butterflies over four YMM
 registers. Each scalar twiddle is broadcast because all four lanes are at the
-same inner frequency. The stage loop is:
+same inner frequency. Twiddle triplets are stored stage-major in exact
+execution order, so the hot loop consumes a linear 24-byte stream instead of
+deriving the `k`, `2k`, and `3k` root addresses. Two independent butterflies
+are software-unrolled together. The stage loop is:
 
 ```text
 for each contiguous radix-4 block
@@ -102,11 +105,16 @@ four row FFT4s, then transpose
 transpose the input rows, then one vector FFT4 over the columns.
 ```
 
-After the four lane-dependent twiddle vectors have been applied, four
-consecutive `q` rows are transposed into four `r` columns. One ordinary vector
-radix-4 butterfly then produces four vectors containing consecutive `q`
-outputs for `p=0,1,2,3`. Those vectors can be stored directly in natural
-output order.
+Four consecutive `q` rows are first transposed into four `r` columns.
+Column zero has no twiddle. Columns one through three are multiplied by
+prepacked factors and one ordinary vector radix-4 butterfly then produces
+four vectors containing consecutive `q` outputs for `p=0,1,2,3`. Those
+vectors can be stored directly in natural output order.
+
+The factor table stores already-duplicated real and imaginary vectors.
+Execution therefore uses two loads instead of loading an interleaved factor
+and issuing two duplication shuffles. This trades plan memory for fewer
+shuffle-port operations in the important cache-resident size range.
 
 This fusion was the largest single improvement. It changes four cross-lane
 FFT4 networks plus an output transpose into one transpose plus one full-width
@@ -118,8 +126,19 @@ arithmetic.
 
 The 16- and 32-point paths retain the whole decomposition in the AVX2
 register file. The 32-point path holds the eight rows from its vector FFT8 and
-feeds them directly to two fused finish blocks. It does not materialize the
-intermediate work array.
+feeds them directly to two fused finish blocks.
+
+For larger even-log inner transforms, four FFT4 children and their first
+radix-4 parent form one straight-line vector FFT16 leaf. GCC carries most rows
+in registers and emits three short-lived stack spills instead of a full
+16-row work-array store/reload round trip. Odd-log transforms store three FFT8
+children, retain the fourth child's eight rows, and consume those rows
+directly in the FFT32 parent.
+
+The fixed 64- and 128-point paths carry completed child rows further into the
+final transpose/butterfly. Hot entry points are explicitly aligned so adding
+fixed codelets cannot accidentally move the general loop onto a poor
+instruction-fetch boundary.
 
 ## Prototype progression
 
@@ -131,11 +150,31 @@ failures as well as the successful path:
 2. block-major radix-4 reduced stage traffic and loop overhead;
 3. fusing digit permutation with FFT4/FFT8 leaves removed one complete pass;
 4. register-resident 16/32 leaves removed small-transform scratch traffic;
-5. transpose-before-butterfly fusion removed most of the finishing shuffles.
+5. transpose-before-butterfly fusion removed most of the finishing shuffles;
+6. column-major factors removed the always-trivial `r=0` multiply;
+7. stage-major twiddles and two-way unrolling removed upper-loop address and
+   control overhead;
+8. FFT16/FFT32 parent fusion carried register rows across the first work
+   boundary;
+9. fixed 64/128 paths carried rows into the final transform.
 
 This progression is important: merely putting a conventional iterative
 radix-2 FFT in YMM registers was not sufficient. The memory traversal and the
 position of the transpose mattered more than the arithmetic count.
+
+Several plausible variants were measured and rejected:
+
+- two radix-8 stages replacing three radix-4 stages saved one work-array pass
+  but lost 2--8% at 1024--8192 because its denser codelet and seven external
+  twiddles dominated while data remained cache-resident;
+- branching out exact `W8`, `-i`, `W8^3` stage frequencies saved arithmetic
+  but lost 3--8% by disrupting the uniform two-way loop;
+- four-way stage unrolling, two-way finish unrolling, and `restrict` hints
+  all regressed;
+- compressing each leaf's permutation to one base offset reduced metadata
+  but merely exchanged table loads for address-generation instructions;
+- retaining one row from every FFT8 child caused code-size/register-pressure
+  regressions; retaining all eight rows from only the final child won.
 
 ## Cycle results
 
@@ -151,21 +190,23 @@ results were measured on an AMD Ryzen 9 3900X with GCC 15.2.0:
 
 | N | lane4-radix4 | tangent-x86-asm | FFmpeg AVTX | vs tangent | vs FFmpeg |
 |---:|---:|---:|---:|---:|---:|
-| 16 | 60.5 | 136.6 | 127.8 | 2.26x | 2.11x |
-| 32 | 74.4 | 115.4 | 131.4 | 1.55x | 1.77x |
-| 64 | 177.5 | 235.9 | 299.3 | 1.33x | 1.69x |
-| 128 | 332.2 | 754.0 | 574.8 | 2.27x | 1.73x |
-| 256 | 795.2 | 1427.1 | 1213.5 | 1.79x | 1.53x |
-| 512 | 1634.1 | 2704.0 | 2549.7 | 1.65x | 1.56x |
-| 1024 | 3853.6 | 5400.3 | 5442.2 | 1.40x | 1.41x |
-| 2048 | 8182.2 | 11446.2 | 12271.0 | 1.40x | 1.50x |
-| 4096 | 19764.9 | 26650.3 | 29091.4 | 1.35x | 1.47x |
-| 8192 | 43130.6 | 70592.1 | 81238.1 | 1.64x | 1.88x |
+| 16 | 63.5 | 135.9 | 125.2 | 2.14x | 1.97x |
+| 32 | 88.3 | 143.7 | 161.7 | 1.63x | 1.83x |
+| 64 | 122.6 | 232.9 | 294.1 | 1.90x | 2.40x |
+| 128 | 262.3 | 754.7 | 570.2 | 2.88x | 2.17x |
+| 256 | 582.5 | 1432.1 | 1205.7 | 2.46x | 2.07x |
+| 512 | 1313.1 | 2710.0 | 2540.8 | 2.06x | 1.94x |
+| 1024 | 2861.8 | 5429.0 | 5473.0 | 1.90x | 1.91x |
+| 2048 | 6611.9 | 11568.5 | 12337.1 | 1.75x | 1.87x |
+| 4096 | 14854.3 | 26430.3 | 28873.9 | 1.78x | 1.94x |
+| 8192 | 35629.2 | 71335.8 | 81392.7 | 2.00x | 2.28x |
 
-The common wall-clock harness separately copies randomized input before each
-timed execution. It also shows a win at every listed size. The exact numbers
-vary with CPU frequency and system load; the cycle ratios above are more
-stable than sub-microsecond wall-clock readings.
+Relative to the preceding committed lane4 implementation, the retained
+changes reduce cycle medians by roughly 17--31% from 64 through 8192. The
+common wall-clock harness separately copies randomized input before each timed
+execution and also shows a win at every listed size. The exact numbers vary
+with CPU frequency and system load; ratios are more stable than
+sub-microsecond wall-clock readings.
 
 ## Correctness and numerical behavior
 
@@ -197,12 +238,12 @@ For `N=4M`, the lane plan currently allocates approximately:
 
 ```text
 8N bytes  vector work array
-8N bytes  packed final twiddle vectors
-2N bytes  inner roots
+12N bytes split real/imag final twiddle vectors
+~2N bytes stage-major inner twiddle triplets
  N bytes  mixed-radix permutation
 ```
 
-or about `19N` bytes plus allocator and plan overhead. Plan construction is
+or about `23N` bytes plus allocator and plan overhead. Plan construction is
 outside benchmark timing. Execution is in-place at the API boundary but uses
 the `8N`-byte work array.
 

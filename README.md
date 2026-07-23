@@ -57,6 +57,8 @@ computes the four length-`M` transforms from `x[4m+r]` simultaneously. Its
 mixed-radix input permutation is fused into FFT4/FFT8 leaves, upper stages are
 block-major radix-4, and the final twiddles feed a fused 4x4 transpose plus
 vector FFT4. Complete 16- and 32-point transforms stay in registers.
+Fused vector FFT16 leaves and fixed 64/128 paths carry child rows across
+work-array boundaries.
 
 This schedule prioritizes regular full-width SIMD and memory locality over
 minimum scalar operation count. On this host it beats tangent assembly and
@@ -126,16 +128,16 @@ Median execution times in microseconds:
 
 | N | radix-2 | tangent C | tangent-x86-asm | lane4-radix4 | FFmpeg AVTX |
 |---:|---:|---:|---:|---:|---:|
-| 16 | 0.130 | 0.110 | 0.060 | 0.030 | 0.060 |
-| 32 | 0.290 | 0.230 | 0.060 | 0.050 | 0.070 |
-| 64 | 0.670 | 0.530 | 0.100 | 0.080 | 0.120 |
-| 128 | 1.550 | 1.060 | 0.240 | 0.130 | 0.200 |
-| 256 | 3.420 | 2.280 | 0.440 | 0.280 | 0.420 |
-| 512 | 7.520 | 4.790 | 0.870 | 0.560 | 0.850 |
-| 1024 | 16.330 | 10.290 | 1.770 | 1.290 | 1.820 |
-| 2048 | 28.540 | 17.540 | 3.070 | 2.150 | 3.190 |
-| 4096 | 61.120 | 37.940 | 6.940 | 5.290 | 7.540 |
-| 8192 | 134.251 | 85.721 | 18.320 | 11.670 | 21.410 |
+| 16 | 0.110 | 0.090 | 0.050 | 0.030 | 0.050 |
+| 32 | 0.230 | 0.190 | 0.050 | 0.040 | 0.060 |
+| 64 | 0.530 | 0.420 | 0.090 | 0.060 | 0.110 |
+| 128 | 1.230 | 0.850 | 0.190 | 0.090 | 0.180 |
+| 256 | 2.710 | 1.830 | 0.350 | 0.170 | 0.340 |
+| 512 | 6.010 | 3.850 | 0.710 | 0.370 | 0.690 |
+| 1024 | 13.010 | 8.260 | 1.430 | 0.790 | 1.470 |
+| 2048 | 28.210 | 17.530 | 3.080 | 1.790 | 3.230 |
+| 4096 | 60.930 | 37.960 | 6.950 | 4.150 | 7.590 |
+| 8192 | 134.980 | 85.740 | 18.470 | 9.800 | 21.700 |
 
 Cycle-accurate comparisons are recorded in the lane-factorized report.
 
