@@ -1688,6 +1688,16 @@ static void tangent_fft_scheduled(const fft_plan *plan,
                 plan->scaled_twiddle[5]);
             goto tangent_x86_nodes_done;
         }
+        if (fuse_x86_gather && plan->n == 64) {
+            tangent_x86_gather_fft64_normal(
+                data,
+                work,
+                plan->tangent_permutation,
+                plan->x86_leaf_tables,
+                plan->scaled_twiddle[5],
+                plan->scaled_twiddle[6]);
+            goto tangent_x86_nodes_done;
+        }
         if (plan->levels == 1) {
             for (kind = TANGENT_NORMAL; kind <= TANGENT_S2; ++kind) {
                 const size_t begin = plan->x86_base_start[kind];

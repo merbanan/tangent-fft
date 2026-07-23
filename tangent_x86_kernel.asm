@@ -99,10 +99,9 @@ tangent_x86_batch_base_s4:
     vaddps      %3, %1, %5                 ; o0
     vsubps      %4, %1, %5                 ; o2
     vpermilps   %6, %6, 0xb1               ; difference.imre
-    vxorps      %7, %6, [sign_odd]          ; -i*difference
-    vxorps      %8, %6, [sign_even]         ; +i*difference
-    vaddps      %5, %2, %7                 ; o1
-    vaddps      %6, %2, %8                 ; o3
+    vxorps      %7, %6, [sign_all]
+    vaddsubps   %5, %2, %7                 ; o1 = u1 - i*difference
+    vaddsubps   %6, %2, %6                 ; o3 = u1 + i*difference
 %endmacro
 
 ; rdi=data, rsi=quarter, rdx=factor, rcx=count
@@ -250,10 +249,9 @@ global %1
     vaddps      ymm2, ymm0, ymm4
     vsubps      ymm3, ymm0, ymm4
     vpermilps   ymm5, ymm5, 0xb1
-    vxorps      ymm6, ymm5, [sign_odd]
-    vxorps      ymm7, ymm5, [sign_even]
-    vaddps      ymm4, ymm1, ymm6
-    vaddps      ymm5, ymm1, ymm7
+    vxorps      ymm6, ymm5, [sign_all]
+    vaddsubps   ymm4, ymm1, ymm6
+    vaddsubps   ymm5, ymm1, ymm5
 
     vmovups     [rdi + rax*8], ymm2
     vmovups     [r10 + rax*8], ymm4
@@ -378,10 +376,8 @@ S4_KERNEL tangent_x86_s4_high, 1
     vmovsldup   %8, %3
     vpermilps   %6, %1, 0xb1
     vpermilps   %7, %2, 0xb1
-    vxorps      %6, %6, [sign_odd]
-    vxorps      %7, %7, [sign_even]
-    vfmadd213ps %1, %8, %6
-    vfmadd213ps %2, %8, %7
+    vfmsubadd213ps %1, %8, %6
+    vfmaddsub213ps %2, %8, %7
 %%done:
 %endmacro
 
@@ -436,10 +432,9 @@ S4_KERNEL tangent_x86_s4_high, 1
     vaddps      xmm2, xmm0, xmm4
     vsubps      xmm3, xmm0, xmm4
     vpermilps   xmm5, xmm5, 0xb1
-    vxorps      xmm6, xmm5, [sign_odd]
-    vxorps      xmm7, xmm5, [sign_even]
-    vaddps      xmm4, xmm1, xmm6
-    vaddps      xmm5, xmm1, xmm7
+    vxorps      xmm6, xmm5, [sign_all]
+    vaddsubps   xmm4, xmm1, xmm6
+    vaddsubps   xmm5, xmm1, xmm5
 %else
     FINISH_UNSCALED xmm0, xmm1, xmm2, xmm3, xmm4, xmm5, xmm6, xmm7
 %if %3 = KIND_S4
@@ -480,10 +475,9 @@ S4_KERNEL tangent_x86_s4_high, 1
     vaddps      xmm2, xmm0, xmm4
     vsubps      xmm3, xmm0, xmm4
     vpermilps   xmm5, xmm5, 0xb1
-    vxorps      xmm6, xmm5, [sign_odd]
-    vxorps      xmm7, xmm5, [sign_even]
-    vaddps      xmm4, xmm1, xmm6
-    vaddps      xmm5, xmm1, xmm7
+    vxorps      xmm6, xmm5, [sign_all]
+    vaddsubps   xmm4, xmm1, xmm6
+    vaddsubps   xmm5, xmm1, xmm5
 %else
     FINISH_UNSCALED xmm0, xmm1, xmm2, xmm3, xmm4, xmm5, xmm6, xmm7
 %if %3 = KIND_S4
@@ -524,10 +518,9 @@ S4_KERNEL tangent_x86_s4_high, 1
     vaddps      ymm2, ymm0, ymm4
     vsubps      ymm3, ymm0, ymm4
     vpermilps   ymm5, ymm5, 0xb1
-    vxorps      ymm6, ymm5, [sign_odd]
-    vxorps      ymm7, ymm5, [sign_even]
-    vaddps      ymm4, ymm1, ymm6
-    vaddps      ymm5, ymm1, ymm7
+    vxorps      ymm6, ymm5, [sign_all]
+    vaddsubps   ymm4, ymm1, ymm6
+    vaddsubps   ymm5, ymm1, ymm5
 %else
     FINISH_UNSCALED ymm0, ymm1, ymm2, ymm3, ymm4, ymm5, ymm6, ymm7
 %if %3 = KIND_S4
@@ -670,10 +663,9 @@ S4_KERNEL tangent_x86_s4_high, 1
     vaddps      xmm12, xmm0, xmm10
     vsubps      xmm13, xmm0, xmm10
     vpermilps   xmm11, xmm11, 0xb1
-    vxorps      xmm14, xmm11, [sign_odd]
-    vxorps      xmm15, xmm11, [sign_even]
-    vaddps      xmm10, xmm1, xmm14
-    vaddps      xmm11, xmm1, xmm15
+    vxorps      xmm14, xmm11, [sign_all]
+    vaddsubps   xmm10, xmm1, xmm14
+    vaddsubps   xmm11, xmm1, xmm11
     vmovaps     xmm0, xmm12
     vmovaps     xmm1, xmm10
     vmovaps     xmm2, xmm13
@@ -711,10 +703,9 @@ S4_KERNEL tangent_x86_s4_high, 1
     vaddps      ymm12, ymm0, ymm10
     vsubps      ymm13, ymm0, ymm10
     vpermilps   ymm11, ymm11, 0xb1
-    vxorps      ymm14, ymm11, [sign_odd]
-    vxorps      ymm15, ymm11, [sign_even]
-    vaddps      ymm10, ymm1, ymm14
-    vaddps      ymm11, ymm1, ymm15
+    vxorps      ymm14, ymm11, [sign_all]
+    vaddsubps   ymm10, ymm1, ymm14
+    vaddsubps   ymm11, ymm1, ymm11
     vmovaps     ymm0, ymm12
     vmovaps     ymm1, ymm10
     vmovaps     ymm2, ymm13
@@ -994,6 +985,115 @@ tangent_x86_gather_fft32_normal:
     vzeroupper
     ret
 
+; Finish one four-complex chunk of a fixed 64-point normal transform while
+; %1 carries the corresponding final 16-point child in a register.
+; %2 is the byte offset within each 16-complex stream.
+%macro FFT64_NORMAL_CHUNK 2
+    vmovups     ymm4, [rsi + %2]
+    vmovups     ymm5, [rsi + 128 + %2]
+    vmovups     ymm6, [rsi + 256 + %2]
+    vmovups     ymm12, [r9 + %2]
+    vmovsldup   ymm13, ymm12
+    vmovshdup   ymm12, ymm12
+    APPLY_FACTOR ymm6, %1, ymm13, ymm12, ymm8, ymm9
+    FINISH_UNSCALED ymm4, ymm5, ymm6, %1, ymm10, ymm11, ymm8, ymm9
+    vmovups     [rsi + %2], ymm6
+    vmovups     [rsi + 128 + %2], ymm10
+    vmovups     [rsi + 256 + %2], %1
+    vmovups     [rsi + 384 + %2], ymm11
+%endmacro
+
+; input, output, permutation, fixed-leaf tables, level-5 factor,
+; level-6 factor. The last 16-point child remains in ymm0..ymm3 through the
+; top-level combine, saving four stores and four reloads.
+global tangent_x86_gather_fft64_normal
+tangent_x86_gather_fft64_normal:
+    mov         rax, r8                    ; level-5 factor
+
+    lea         r10, [rdx + 16*4]
+    lea         r8, [rsi + 16*8]
+    GATHER_PAIR xmm0, 0
+    GATHER_PAIR xmm1, 2
+    GATHER_PAIR xmm2, 4
+    GATHER_PAIR xmm3, 6
+    REG_LEAF3_CORE KIND_S
+
+    lea         r10, [rdx + 24*4]
+    lea         r8, [rsi + 24*8]
+    GATHER_PAIR xmm0, 0
+    GATHER_PAIR xmm1, 2
+    GATHER_PAIR xmm2, 4
+    GATHER_PAIR xmm3, 6
+    REG_LEAF3_CORE KIND_S
+
+    mov         r10, rdx
+    mov         r8, rsi
+    GATHER_PAIR xmm0, 0
+    GATHER_PAIR xmm1, 2
+    GATHER_PAIR xmm2, 4
+    GATHER_PAIR xmm3, 6
+    GATHER_PAIR xmm4, 8
+    GATHER_PAIR xmm5, 10
+    GATHER_PAIR xmm6, 12
+    GATHER_PAIR xmm7, 14
+    REG_LEAF4_CALC KIND_NORMAL
+
+    vmovups     ymm4, [rsi + 16*8]
+    vmovups     ymm5, [rsi + 20*8]
+    vmovups     ymm6, [rsi + 24*8]
+    vmovups     ymm7, [rsi + 28*8]
+
+    vmovups     ymm12, [rax]
+    vmovsldup   ymm13, ymm12
+    vmovshdup   ymm12, ymm12
+    APPLY_FACTOR ymm4, ymm6, ymm13, ymm12, ymm10, ymm11
+    FINISH_UNSCALED ymm0, ymm2, ymm4, ymm6, ymm8, ymm9, ymm10, ymm11
+    vmovups     [rsi], ymm4
+    vmovups     [rsi + 8*8], ymm8
+    vmovups     [rsi + 16*8], ymm6
+    vmovups     [rsi + 24*8], ymm9
+
+    vmovups     ymm12, [rax + 32]
+    vmovsldup   ymm13, ymm12
+    vmovshdup   ymm12, ymm12
+    APPLY_FACTOR ymm5, ymm7, ymm13, ymm12, ymm10, ymm11
+    FINISH_UNSCALED ymm1, ymm3, ymm5, ymm7, ymm8, ymm9, ymm10, ymm11
+    vmovups     [rsi + 4*8], ymm5
+    vmovups     [rsi + 12*8], ymm8
+    vmovups     [rsi + 20*8], ymm7
+    vmovups     [rsi + 28*8], ymm9
+
+    lea         r10, [rdx + 32*4]
+    lea         r8, [rsi + 32*8]
+    GATHER_PAIR xmm0, 0
+    GATHER_PAIR xmm1, 2
+    GATHER_PAIR xmm2, 4
+    GATHER_PAIR xmm3, 6
+    GATHER_PAIR xmm4, 8
+    GATHER_PAIR xmm5, 10
+    GATHER_PAIR xmm6, 12
+    GATHER_PAIR xmm7, 14
+    REG_LEAF4_CORE KIND_S
+
+    lea         r10, [rdx + 48*4]
+    lea         r8, [rsi + 48*8]
+    GATHER_PAIR xmm0, 0
+    GATHER_PAIR xmm1, 2
+    GATHER_PAIR xmm2, 4
+    GATHER_PAIR xmm3, 6
+    GATHER_PAIR xmm4, 8
+    GATHER_PAIR xmm5, 10
+    GATHER_PAIR xmm6, 12
+    GATHER_PAIR xmm7, 14
+    REG_LEAF4_CALC KIND_S
+
+    FFT64_NORMAL_CHUNK ymm0, 0
+    FFT64_NORMAL_CHUNK ymm1, 32
+    FFT64_NORMAL_CHUNK ymm2, 64
+    FFT64_NORMAL_CHUNK ymm3, 96
+    vzeroupper
+    ret
+
 ; input, output, permutation, offsets, count, tables, kind=[stack].
 %macro MAKE_GATHER_LEAF_BATCH 2
 global %1 %+ _n
@@ -1211,10 +1311,9 @@ tangent_x86_batch_s2_q1:
     vaddps      xmm2, xmm0, xmm4
     vsubps      xmm3, xmm0, xmm4
     vpermilps   xmm5, xmm5, 0xb1
-    vxorps      xmm6, xmm5, [sign_odd]
-    vxorps      xmm7, xmm5, [sign_even]
-    vaddps      xmm4, xmm1, xmm6
-    vaddps      xmm5, xmm1, xmm7
+    vxorps      xmm6, xmm5, [sign_all]
+    vaddsubps   xmm4, xmm1, xmm6
+    vaddsubps   xmm5, xmm1, xmm5
     vmovq       [r9], xmm2
     vmovq       [r9 + 8], xmm4
     vmovq       [r9 + 16], xmm3
@@ -1260,10 +1359,9 @@ global %1
     vaddps      %6, %4, %9
     vsubps      %7, %4, %9
     vpermilps   %10, %10, 0xb1
-    vxorps      %9, %10, [sign_odd]
-    vxorps      %4, %10, [sign_even]
-    vaddps      %9, %5, %9
-    vaddps      %10, %5, %4
+    vxorps      %9, %10, [sign_all]
+    vaddsubps   %9, %5, %9
+    vaddsubps   %10, %5, %10
     vmovups     [r10], %6
     vmovups     [r10 + %8], %9
     vmovups     [r10 + 2*%8], %7
@@ -1304,10 +1402,9 @@ tangent_x86_batch_s2_q2:
     vaddps      xmm2, xmm0, xmm4
     vsubps      xmm3, xmm0, xmm4
     vpermilps   xmm5, xmm5, 0xb1
-    vxorps      xmm6, xmm5, [sign_odd]
-    vxorps      xmm7, xmm5, [sign_even]
-    vaddps      xmm4, xmm1, xmm6
-    vaddps      xmm5, xmm1, xmm7
+    vxorps      xmm6, xmm5, [sign_all]
+    vaddsubps   xmm4, xmm1, xmm6
+    vaddsubps   xmm5, xmm1, xmm5
     vmovups     [r10], xmm2
     vmovups     [r10 + 16], xmm4
     vmovups     [r10 + 32], xmm3
@@ -1343,10 +1440,9 @@ tangent_x86_batch_s2_q4:
     vaddps      ymm2, ymm0, ymm4
     vsubps      ymm3, ymm0, ymm4
     vpermilps   ymm5, ymm5, 0xb1
-    vxorps      ymm6, ymm5, [sign_odd]
-    vxorps      ymm7, ymm5, [sign_even]
-    vaddps      ymm4, ymm1, ymm6
-    vaddps      ymm5, ymm1, ymm7
+    vxorps      ymm6, ymm5, [sign_all]
+    vaddsubps   ymm4, ymm1, ymm6
+    vaddsubps   ymm5, ymm1, ymm5
     vmovups     [r10], ymm2
     vmovups     [r10 + 32], ymm4
     vmovups     [r10 + 64], ymm3
@@ -1603,10 +1699,9 @@ tangent_x86_batch_s2_qn:
     vaddps      ymm2, ymm0, ymm4
     vsubps      ymm3, ymm0, ymm4
     vpermilps   ymm5, ymm5, 0xb1
-    vxorps      ymm6, ymm5, [sign_odd]
-    vxorps      ymm7, ymm5, [sign_even]
-    vaddps      ymm4, ymm1, ymm6
-    vaddps      ymm5, ymm1, ymm7
+    vxorps      ymm6, ymm5, [sign_all]
+    vaddsubps   ymm4, ymm1, ymm6
+    vaddsubps   ymm5, ymm1, ymm5
     vmovups     [r10 + r9], ymm2
     vmovups     [r11 + r9], ymm4
     vmovups     [rdx + r9], ymm3

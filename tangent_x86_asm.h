@@ -55,6 +55,12 @@ void tangent_x86_gather_fft32_normal(const fft_complex *input,
                                      const uint32_t *permutation,
                                      const fft_complex *tables,
                                      const fft_complex *factor);
+void tangent_x86_gather_fft64_normal(const fft_complex *input,
+                                     fft_complex *output,
+                                     const uint32_t *permutation,
+                                     const fft_complex *tables,
+                                     const fft_complex *level5_factor,
+                                     const fft_complex *level6_factor);
 /*
  * All counts are multiples of four complex samples.  data and each coefficient
  * pointer are already advanced to the first butterfly in the requested range.
