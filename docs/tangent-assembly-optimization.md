@@ -54,21 +54,21 @@ transition instructions and improved the 512-point path by roughly 1–2%.
 ### Result
 
 The final forward wall-clock benchmark is in `benchmark.csv`. At its 0.01 µs
-small-size resolution, tangent AVX2/FMA beats FFmpeg at 16, 32, 64, 128, 256,
-1024, 2048, 4096, and 8192. At 512 it remains slower:
+small-size resolution, tangent AVX2/FMA beats native FFmpeg at 16, 32, 1024,
+2048, 4096, and 8192; it ties at 64 and remains slower at 128, 256, and 512:
 
 | N | tangent-x86-asm | FFmpeg AVTX | Tangent relative |
 |---:|---:|---:|---:|
 | 16 | 0.040 µs | 0.060 µs | 33.3% faster |
 | 32 | 0.060 µs | 0.070 µs | 14.3% faster |
-| 64 | 0.100 µs | 0.120 µs | 16.7% faster |
-| 128 | 0.160 µs | 0.170 µs | 5.9% faster |
-| 256 | 0.330 µs | 0.340 µs | 2.9% faster |
+| 64 | 0.100 µs | 0.100 µs | tie |
+| 128 | 0.170 µs | 0.160 µs | 6.3% slower |
+| 256 | 0.340 µs | 0.330 µs | 3.0% slower |
 | 512 | 0.730 µs | 0.690 µs | 5.8% slower |
-| 1024 | 1.440 µs | 1.480 µs | 2.7% faster |
-| 2048 | 3.000 µs | 3.230 µs | 7.1% faster |
-| 4096 | 6.960 µs | 7.560 µs | 7.9% faster |
-| 8192 | 18.630 µs | 21.300 µs | 12.5% faster |
+| 1024 | 1.420 µs | 1.480 µs | 4.1% faster |
+| 2048 | 3.010 µs | 3.210 µs | 6.2% faster |
+| 4096 | 6.940 µs | 7.650 µs | 9.3% faster |
+| 8192 | 18.450 µs | 21.161 µs | 12.8% faster |
 
 Sub-microsecond medians have coarse timer quantization. The final
 `make tangent-cycles` run gives the more precise comparison:

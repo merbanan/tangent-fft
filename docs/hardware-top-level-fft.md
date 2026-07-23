@@ -156,20 +156,22 @@ sizes, and data movement did not match the machine.
 ## Ryzen 9 3900X measurements
 
 Median microseconds from the checked-in `benchmark.csv`; plan construction is
-excluded and FFmpeg includes the copies required by the common in-place API:
+excluded and both FFmpeg configurations include the copies required by the
+common in-place API. Native AVTX auto-dispatches on the host, while the SSE
+plan is created with FFmpeg's x86 feature mask capped at SSE4.2:
 
-| N | lane4 AVX2/FMA | lane8 AVX2/FMA | hw SSE | FFmpeg AVTX |
-|---:|---:|---:|---:|---:|
-| 16 | 0.040 | 0.040 | 0.040 | 0.060 |
-| 32 | 0.040 | 0.050 | 0.050 | 0.060 |
-| 64 | 0.060 | 0.070 | 0.080 | 0.100 |
-| 128 | 0.090 | 0.120 | 0.160 | 0.160 |
-| 256 | 0.180 | 0.230 | 0.320 | 0.340 |
-| 512 | 0.370 | 0.450 | 0.710 | 0.690 |
-| 1024 | 0.790 | 0.980 | 1.480 | 1.460 |
-| 2048 | 1.820 | 1.990 | 3.350 | 3.220 |
-| 4096 | 4.190 | 4.830 | 7.220 | 7.540 |
-| 8192 | 9.920 | 10.680 | 16.391 | 21.371 |
+| N | lane4 AVX2/FMA | lane8 AVX2/FMA | hw SSE | FFmpeg native | FFmpeg SSE |
+|---:|---:|---:|---:|---:|---:|
+| 16 | 0.040 | 0.040 | 0.040 | 0.060 | 0.080 |
+| 32 | 0.050 | 0.070 | 0.060 | 0.070 | 0.150 |
+| 64 | 0.060 | 0.070 | 0.080 | 0.100 | 0.290 |
+| 128 | 0.090 | 0.120 | 0.160 | 0.160 | 0.610 |
+| 256 | 0.180 | 0.230 | 0.320 | 0.340 | 1.320 |
+| 512 | 0.370 | 0.440 | 0.710 | 0.690 | 2.870 |
+| 1024 | 0.780 | 0.960 | 1.470 | 1.480 | 6.310 |
+| 2048 | 1.790 | 1.970 | 3.330 | 3.210 | 13.850 |
+| 4096 | 4.160 | 4.850 | 7.130 | 7.650 | 30.530 |
+| 8192 | 9.830 | 10.330 | 16.470 | 21.161 | 71.210 |
 
 Timer quantization is significant below 128. `make lane8-profile` reports
 serialized-TSC base, upper-stage, and finish costs separately.

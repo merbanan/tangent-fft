@@ -37,7 +37,8 @@ $(TARGET): $(OBJECTS) $(FFMPEG_LIB)
 
 fft.o: fft.c fft.h ffmpeg_fft.h tangent_x86_asm.h lane4_fft.h \
 	lane4_portable.h tangent_sse_asm.h lane2_sse.h
-ffmpeg_fft.o: ffmpeg_fft.c ffmpeg_fft.h fft.h third_party/ffmpeg/libavutil/tx.h
+ffmpeg_fft.o: ffmpeg_fft.c ffmpeg_fft.h fft.h \
+	third_party/ffmpeg/libavutil/tx.h third_party/ffmpeg/libavutil/cpu.h
 harness.o: harness.c fft.h
 
 lane4_portable.o: lane4_portable.c lane4_portable.h \

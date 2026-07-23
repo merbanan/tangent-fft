@@ -1,6 +1,6 @@
 # Tangent FFT comparison
 
-This repository contains twenty-five single-precision complex FFT benchmark
+This repository contains twenty-six single-precision complex FFT benchmark
 entries, each supporting forward and normalized inverse transforms:
 
 - iterative radix-2 Cooley–Tukey in C;
@@ -20,7 +20,8 @@ entries, each supporting forward and normalized inverse transforms:
 - `hw-sse-auto`, a measured lane2/lane4 SSE assembly crossover dispatcher;
 - lane4 kernels for AVX,
   AVX+FMA, AVX2, and AVX2+FMA;
-- FFmpeg `libavutil` AVTX, built locally from pinned source.
+- FFmpeg `libavutil` AVTX, built locally from pinned source, in both native
+  auto-dispatch and reproducible SSE4.2-and-below configurations.
 
 Every algorithm uses `float` samples, coefficients, twiddles, and scale
 factors. All compute the conventional unnormalised transform
@@ -66,9 +67,12 @@ remain available:
 ```
 
 Plan allocation and coefficient generation are excluded from execution
-timings. The FFmpeg row includes the copies into and out of its aligned AVTX
-buffers, matching this project's in-place public API. The harness prints all
-results to the console and can also write CSV.
+timings. Both FFmpeg rows include the copies into and out of their aligned
+AVTX buffers, matching this project's in-place public API. `ffmpeg-avtx`
+uses FFmpeg's native CPU dispatch; `ffmpeg-sse` creates the AVTX plan with
+AVX disabled and the x86 feature mask capped at SSE4.2, then restores the
+previous process mask. The harness prints all results to the console and can
+also write CSV.
 
 Each x86 lane2, lane4, and tangent-SSE entry is runtime-gated by CPUID.
 `tangent-x86-asm` is enabled when the host is x86-64 with AVX2 and FMA.
@@ -174,23 +178,28 @@ The checked-in `benchmark.csv` comes from:
 
 ```sh
 ./fft_harness --bench --min-power 4 --max-power 13 \
-  --target-ms 1000 --csv benchmark.csv
+  --target-ms 100 --csv benchmark.csv
 ```
 
 Median execution times in microseconds:
 
-| N | radix-2 | tangent C | tangent SSE3 | tangent AVX2/FMA | lane2 SSE | lane4 AVX2/FMA | FFmpeg AVTX |
-|---:|---:|---:|---:|---:|---:|---:|---:|
-| 16 | 0.130 | 0.120 | 0.080 | 0.040 | 0.040 | 0.040 | 0.060 |
-| 32 | 0.290 | 0.220 | 0.130 | 0.060 | 0.060 | 0.050 | 0.070 |
-| 64 | 0.650 | 0.490 | 0.230 | 0.110 | 0.080 | 0.060 | 0.100 |
-| 128 | 1.200 | 0.820 | 0.360 | 0.160 | 0.160 | 0.090 | 0.160 |
-| 256 | 2.710 | 1.750 | 0.750 | 0.360 | 0.330 | 0.180 | 0.340 |
-| 512 | 5.950 | 3.720 | 1.550 | 0.720 | 0.760 | 0.370 | 0.690 |
-| 1024 | 12.890 | 7.920 | 3.280 | 1.420 | 1.590 | 0.790 | 1.470 |
-| 2048 | 27.910 | 16.980 | 6.970 | 3.000 | 3.670 | 1.810 | 3.250 |
-| 4096 | 60.670 | 36.491 | 15.330 | 7.000 | 7.870 | 4.160 | 7.480 |
-| 8192 | 134.491 | 82.780 | 35.830 | 18.330 | 20.411 | 9.840 | 21.470 |
+| N | radix-2 | tangent C | tangent SSE3 | tangent AVX2/FMA | lane2 SSE | lane4 AVX2/FMA | FFmpeg native | FFmpeg SSE |
+|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 16 | 0.140 | 0.110 | 0.070 | 0.040 | 0.040 | 0.040 | 0.060 | 0.080 |
+| 32 | 0.310 | 0.220 | 0.120 | 0.060 | 0.060 | 0.050 | 0.070 | 0.150 |
+| 64 | 0.670 | 0.490 | 0.220 | 0.100 | 0.080 | 0.060 | 0.100 | 0.290 |
+| 128 | 1.250 | 0.800 | 0.360 | 0.170 | 0.160 | 0.090 | 0.160 | 0.610 |
+| 256 | 2.760 | 1.760 | 0.760 | 0.340 | 0.330 | 0.180 | 0.330 | 1.320 |
+| 512 | 6.060 | 3.700 | 1.560 | 0.730 | 0.760 | 0.370 | 0.690 | 2.870 |
+| 1024 | 13.190 | 7.920 | 3.260 | 1.420 | 1.580 | 0.780 | 1.480 | 6.310 |
+| 2048 | 28.520 | 16.880 | 6.930 | 3.010 | 3.660 | 1.790 | 3.210 | 13.850 |
+| 4096 | 61.950 | 36.380 | 15.330 | 6.940 | 7.800 | 4.160 | 7.650 | 30.530 |
+| 8192 | 136.866 | 82.650 | 35.660 | 18.450 | 20.030 | 9.830 | 21.161 | 71.210 |
+
+The exhaustive 26-implementation by 10-size table is in
+[`docs/benchmark-results.md`](docs/benchmark-results.md); `benchmark.csv`
+contains the same complete run plus sample counts, minima, arithmetic counts,
+speedups, and checksums.
 
 The wall-clock timer is quantized at 0.01 µs for the smallest transforms.
 The longer-batch `make tangent-cycles` run is more discriminating: tangent

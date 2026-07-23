@@ -279,7 +279,7 @@ static int run_correctness_tests(void)
         (void)fft_execute(plan, FFT_RADIX2, radix);
 
         for (algorithm = FFT_SPLIT_RADIX;
-             algorithm <= FFT_FFMPEG;
+             algorithm < FFT_ALGORITHM_COUNT;
              ++algorithm) {
             const double tolerance =
                 6.0e-6 * (double)power;
@@ -305,7 +305,7 @@ static int run_correctness_tests(void)
         memcpy(radix, input, n * sizeof(*radix));
         (void)fft_inverse_execute(plan, FFT_RADIX2, radix);
         for (algorithm = FFT_SPLIT_RADIX;
-             algorithm <= FFT_FFMPEG;
+             algorithm < FFT_ALGORITHM_COUNT;
              ++algorithm) {
             const double tolerance =
                 6.0e-6 * (double)power;
@@ -485,8 +485,8 @@ static int run_benchmarks(const options *settings)
     printf("\n%s benchmarks "
            "(median execution time; plan/setup excluded)\n",
            settings->benchmark_inverse ? "Inverse" : "Forward");
-    printf("FFmpeg AVTX is reported through N=131072, its direct optimized "
-           "x86 kernel range.\n");
+    printf("FFmpeg AVTX native dispatch and an SSE4.2-and-below restricted "
+           "plan are reported through N=131072.\n");
     printf("%10s  %-16s %12s %10s %14s %11s %8s\n",
            "N",
            "algorithm",

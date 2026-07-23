@@ -70,7 +70,8 @@ int main(int argc, char **argv)
         FFT_TANGENT_X86_ASM,
         FFT_TANGENT_SSE,
         FFT_TANGENT_SSE3,
-        FFT_FFMPEG
+        FFT_FFMPEG,
+        FFT_FFMPEG_SSE
     };
 
     if (argc == 2) {

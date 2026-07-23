@@ -32,7 +32,7 @@ The final warmed benchmark was produced with:
 taskset -c 2 ./fft_harness --bench --min-power 4 --max-power 13 \
   --target-ms 100 >/dev/null
 taskset -c 2 ./fft_harness --bench --min-power 4 --max-power 13 \
-  --target-ms 1000 --csv benchmark.csv
+  --target-ms 100 --csv benchmark.csv
 ```
 
 ## Results summary
@@ -396,15 +396,15 @@ Median microseconds after the retained changes:
 
 | N | tangent-x86-asm | FFmpeg AVTX | Tangent relative to FFmpeg |
 |---:|---:|---:|---:|
-| 16 | 0.050 | 0.050 | tie |
-| 32 | 0.050 | 0.060 | 16.7% faster |
-| 64 | 0.080 | 0.100 | 20.0% faster |
-| 128 | 0.200 | 0.170 | 17.6% slower |
-| 256 | 0.380 | 0.340 | 11.8% slower |
-| 512 | 0.720 | 0.690 | 4.3% slower |
-| 1024 | 1.490 | 1.470 | 1.4% slower |
-| 2048 | 3.090 | 3.230 | 4.3% faster |
-| 4096 | 6.990 | 7.550 | 7.4% faster |
-| 8192 | 18.460 | 21.380 | 13.7% faster |
+| 16 | 0.040 | 0.060 | 33.3% faster |
+| 32 | 0.060 | 0.070 | 14.3% faster |
+| 64 | 0.100 | 0.100 | tie |
+| 128 | 0.170 | 0.160 | 6.3% slower |
+| 256 | 0.340 | 0.330 | 3.0% slower |
+| 512 | 0.730 | 0.690 | 5.8% slower |
+| 1024 | 1.420 | 1.480 | 4.1% faster |
+| 2048 | 3.010 | 3.210 | 6.2% faster |
+| 4096 | 6.940 | 7.650 | 9.3% faster |
+| 8192 | 18.450 | 21.161 | 12.8% faster |
 
 The complete machine-readable run is in `benchmark.csv`.

@@ -85,18 +85,22 @@ repository's common reverse-and-scale identity.
 Ryzen 9 3900X wall-clock medians from the checked-in `benchmark.csv`,
 in microseconds:
 
-| N | lane2 SSE | lane4 SSE | FFmpeg AVTX |
-|---:|---:|---:|---:|
-| 16 | 0.040 | 0.050 | 0.060 |
-| 32 | 0.060 | 0.070 | 0.070 |
-| 64 | 0.080 | 0.100 | 0.100 |
-| 128 | 0.160 | 0.160 | 0.160 |
-| 256 | 0.330 | 0.320 | 0.340 |
-| 512 | 0.760 | 0.710 | 0.690 |
-| 1024 | 1.590 | 1.480 | 1.470 |
-| 2048 | 3.670 | 3.350 | 3.250 |
-| 4096 | 7.870 | 7.260 | 7.480 |
-| 8192 | 20.411 | 16.610 | 21.470 |
+| N | lane2 SSE | lane4 SSE | FFmpeg native | FFmpeg SSE |
+|---:|---:|---:|---:|---:|
+| 16 | 0.040 | 0.040 | 0.060 | 0.080 |
+| 32 | 0.060 | 0.060 | 0.070 | 0.150 |
+| 64 | 0.080 | 0.140 | 0.100 | 0.290 |
+| 128 | 0.160 | 0.160 | 0.160 | 0.610 |
+| 256 | 0.330 | 0.320 | 0.330 | 1.320 |
+| 512 | 0.760 | 0.710 | 0.690 | 2.870 |
+| 1024 | 1.580 | 1.480 | 1.480 | 6.310 |
+| 2048 | 3.660 | 3.330 | 3.210 | 13.850 |
+| 4096 | 7.800 | 7.120 | 7.650 | 30.530 |
+| 8192 | 20.030 | 16.490 | 21.161 | 71.210 |
+
+The native FFmpeg column auto-dispatches to AVX codelets on this CPU. The
+FFmpeg SSE column is a separately created AVTX plan with its feature mask
+capped at SSE4.2, making the ISA-matched comparison explicit.
 
 The small-size wall timer has 0.01-microsecond resolution. The more precise
 `make lane2-cycles` run measured:

@@ -90,6 +90,7 @@ struct fft_plan {
 
     fft_complex *scratch;
     ffmpeg_fft_plan *ffmpeg;
+    ffmpeg_fft_plan *ffmpeg_sse;
     lane4_portable_plan *lane4_portable;
 #if HAVE_TANGENT_X86_ASM
     lane2_sse_plan *lane2_sse;
@@ -1049,6 +1050,9 @@ fft_plan *fft_plan_create(size_t n)
         ((n * sizeof(*plan->scratch) + 63) / 64) * 64);
     if (n <= 131072) {
         plan->ffmpeg = ffmpeg_fft_plan_create(n);
+#if defined(__i386__) || defined(__x86_64__)
+        plan->ffmpeg_sse = ffmpeg_sse_fft_plan_create(n);
+#endif
         if (n >= 16) {
             plan->lane4_portable = lane4_portable_plan_create(n);
         }
@@ -1084,6 +1088,9 @@ fft_plan *fft_plan_create(size_t n)
     }
     if (plan->scratch == NULL ||
         (n <= 131072 && plan->ffmpeg == NULL) ||
+#if defined(__i386__) || defined(__x86_64__)
+        (n <= 131072 && plan->ffmpeg_sse == NULL) ||
+#endif
         (n >= 16 && n <= 131072 && plan->lane4_portable == NULL) ||
 #if HAVE_TANGENT_X86_ASM
         (n >= 16 && n <= 131072 &&
@@ -1126,6 +1133,7 @@ void fft_plan_destroy(fft_plan *plan)
 
     free(plan->scratch);
     ffmpeg_fft_plan_destroy(plan->ffmpeg);
+    ffmpeg_fft_plan_destroy(plan->ffmpeg_sse);
     lane4_portable_plan_destroy(plan->lane4_portable);
 #if HAVE_TANGENT_X86_ASM
     lane2_sse_plan_destroy(plan->lane2_sse);
@@ -1185,6 +1193,9 @@ int fft_plan_supports(const fft_plan *plan, fft_algorithm algorithm)
     }
     if (algorithm == FFT_FFMPEG) {
         return plan->ffmpeg != NULL;
+    }
+    if (algorithm == FFT_FFMPEG_SSE) {
+        return plan->ffmpeg_sse != NULL;
     }
     if (algorithm == FFT_TANGENT_X86_ASM) {
         return plan->tangent_x86_asm_available;
@@ -2593,6 +2604,10 @@ int fft_execute(fft_plan *plan, fft_algorithm algorithm, fft_complex *data)
         return plan->ffmpeg == NULL
                    ? -1
                    : ffmpeg_fft_execute(plan->ffmpeg, data);
+    case FFT_FFMPEG_SSE:
+        return plan->ffmpeg_sse == NULL
+                   ? -1
+                   : ffmpeg_fft_execute(plan->ffmpeg_sse, data);
     default:
         return -1;
     }
@@ -2683,6 +2698,8 @@ const char *fft_algorithm_name(fft_algorithm algorithm)
         return "lane8-avx2-fma";
     case FFT_HW_SSE:
         return "hw-sse-auto";
+    case FFT_FFMPEG_SSE:
+        return "ffmpeg-sse";
     default:
         return "unknown";
     }
@@ -2693,7 +2710,7 @@ uint64_t fft_theoretical_flops(fft_algorithm algorithm, size_t n)
     const unsigned log_n = integer_log2(n);
     int64_t result;
 
-    if (algorithm == FFT_FFMPEG ||
+    if (algorithm == FFT_FFMPEG || algorithm == FFT_FFMPEG_SSE ||
         algorithm == FFT_LANE2_SSE ||
         (algorithm >= FFT_LANE4_C &&
          algorithm <= FFT_LANE4_AVX2_FMA)) {
@@ -2742,6 +2759,7 @@ uint64_t fft_theoretical_flops(fft_algorithm algorithm, size_t n)
     case FFT_LANE4_AVX2_FMA:
     case FFT_LANE2_SSE:
     case FFT_FFMPEG:
+    case FFT_FFMPEG_SSE:
         return 0;
     default:
         return 0;
