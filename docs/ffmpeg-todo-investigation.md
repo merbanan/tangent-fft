@@ -51,6 +51,49 @@ The retained changes preserve the previous worst relative error for
 cross-checks through `2^22`. Patched FFmpeg retains its previous
 `1.371e-07` worst relative error in the same test.
 
+## Applied to the lane4 SSE rewrite
+
+A later pass applied the same structural lessons to the 128-bit lane4 path.
+The complete transform scheduler and kernels now live in
+`lane4_sse_stage.asm` and use FFmpeg's vendored x86inc conventions. The
+retained changes are:
+
+- stage-major replicated twiddle triplets, removing an integer multiply and
+  derived coefficient addresses from every general butterfly;
+- four linear row pointers in upper radix-4 stages;
+- a register-resident FFT8 using all sixteen XMM registers and no temporary
+  work-array round trip;
+- straight-line reduced multiplication at the `W8`, `-i`, `W8^3` stage
+  position;
+- one assembly public entry shared by the SSE-through-SSE4.2 API aliases.
+
+Two register-carry designs were tested and rejected. Carrying the final inner
+radix-4 directly into four horizontal outer FFT4s was numerically correct but
+the additional shuffles and scattered stores doubled the 8192-point time.
+The first FFT8 attempt recomputed its FFT2 halves in two input passes; it
+removed scratch traffic but did not improve the measured ratio. The retained
+FFT8 instead uses no-temporary in-place butterflies to keep all rows live.
+
+Final forward medians for the SSE body versus the host-selected FFmpeg
+AVX/FMA code are:
+
+| N | lane4 SSE | FFmpeg | relation |
+|---:|---:|---:|---:|
+| 16 | 0.040 µs | 0.060 µs | 33.3% faster |
+| 32 | 0.060 µs | 0.070 µs | 14.3% faster |
+| 64 | 0.100 µs | 0.120 µs | 16.7% faster |
+| 128 | 0.160 µs | 0.160 µs | tied |
+| 256 | 0.320 µs | 0.340 µs | 5.9% faster |
+| 512 | 0.710 µs | 0.690 µs | 2.9% slower |
+| 1024 | 1.480 µs | 1.460 µs | 1.4% slower |
+| 2048 | 3.330 µs | 3.230 µs | 3.1% slower |
+| 4096 | 7.250 µs | 7.530 µs | 3.7% faster |
+| 8192 | 16.300 µs | 20.990 µs | 22.3% faster |
+
+This is close SSE-only parity, but not a defensible claim of winning every
+size. The 256-bit lane4 implementations do meet the project-wide target:
+each is clearly faster than FFmpeg at every listed size.
+
 ## Direct FFmpeg patch and A/B result
 
 The retained FFmpeg change is confined to the FMA3 split-radix leaves used

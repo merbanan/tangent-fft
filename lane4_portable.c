@@ -1,9 +1,27 @@
 #include "lane4_portable_internal.h"
 
 #include <math.h>
+#include <stddef.h>
 #include <stdlib.h>
 
 #define LANE4_PI 3.141592653589793238462643383279502884f
+
+#if HAVE_TANGENT_X86_ASM
+_Static_assert(offsetof(lane4_portable_plan, inner_size) == 8,
+               "update lane4 assembly plan offsets");
+_Static_assert(offsetof(lane4_portable_plan, inner_levels) == 16,
+               "update lane4 assembly plan offsets");
+_Static_assert(offsetof(lane4_portable_plan, mixed_permutation) == 32,
+               "update lane4 assembly plan offsets");
+_Static_assert(offsetof(lane4_portable_plan, replicated_root) == 48,
+               "update lane4 assembly plan offsets");
+_Static_assert(offsetof(lane4_portable_plan, finish_re) == 56,
+               "update lane4 assembly plan offsets");
+_Static_assert(offsetof(lane4_portable_plan, finish_im) == 64,
+               "update lane4 assembly plan offsets");
+_Static_assert(offsetof(lane4_portable_plan, work) == 72,
+               "update lane4 assembly plan offsets");
+#endif
 
 static size_t round_up(size_t value, size_t alignment)
 {
@@ -32,6 +50,32 @@ static uint32_t reverse_bits(uint32_t value, unsigned bits)
     return result;
 }
 
+static uint32_t reverse_mixed_radix(uint32_t value, unsigned levels)
+{
+    unsigned radices[16];
+    unsigned digits[16] = {0};
+    unsigned count = 0;
+    uint32_t result = 0;
+    uint32_t multiplier = 1;
+    int i;
+
+    if ((levels & 1U) != 0) {
+        radices[count++] = 2;
+    }
+    while (count < (levels + 1U) / 2U) {
+        radices[count++] = 4;
+    }
+    for (i = 0; i < (int)count; ++i) {
+        digits[i] = value % radices[i];
+        value /= radices[i];
+    }
+    for (i = (int)count - 1; i >= 0; --i) {
+        result += digits[i] * multiplier;
+        multiplier *= radices[i];
+    }
+    return result;
+}
+
 lane4_portable_plan *lane4_portable_plan_create(size_t n)
 {
     lane4_portable_plan *plan;
@@ -50,9 +94,15 @@ lane4_portable_plan *lane4_portable_plan_create(size_t n)
     plan->inner_levels = integer_log2(plan->inner_size);
     plan->permutation = (uint32_t *)malloc(
         plan->inner_size * sizeof(*plan->permutation));
+    plan->mixed_permutation = (uint32_t *)malloc(
+        plan->inner_size * sizeof(*plan->mixed_permutation));
     plan->root = (fft_complex *)aligned_alloc(
         64,
-        round_up((plan->inner_size / 2) * sizeof(*plan->root), 64));
+        round_up(plan->inner_size * sizeof(*plan->root), 64));
+    plan->replicated_root =
+        (lane4_replicated_root *)aligned_alloc(
+            64, round_up(plan->inner_size *
+                         sizeof(*plan->replicated_root), 64));
     plan->finish_re = (float *)aligned_alloc(
         64, round_up(3 * plan->inner_size * sizeof(float), 64));
     plan->finish_im = (float *)aligned_alloc(
@@ -61,7 +111,10 @@ lane4_portable_plan *lane4_portable_plan_create(size_t n)
         64,
         round_up(plan->inner_size * sizeof(*plan->work), 64));
 
-    if (plan->permutation == NULL || plan->root == NULL ||
+    if (plan->permutation == NULL ||
+        plan->mixed_permutation == NULL ||
+        plan->root == NULL ||
+        plan->replicated_root == NULL ||
         plan->finish_re == NULL || plan->finish_im == NULL ||
         plan->work == NULL) {
         lane4_portable_plan_destroy(plan);
@@ -71,12 +124,48 @@ lane4_portable_plan *lane4_portable_plan_create(size_t n)
     for (i = 0; i < plan->inner_size; ++i) {
         plan->permutation[i] =
             4 * reverse_bits((uint32_t)i, plan->inner_levels);
+        plan->mixed_permutation[i] =
+            4 * reverse_mixed_radix(
+                (uint32_t)i, plan->inner_levels);
     }
-    for (i = 0; i < plan->inner_size / 2; ++i) {
+    for (i = 0; i < plan->inner_size; ++i) {
         const float angle =
             -2.0f * LANE4_PI * (float)i / (float)plan->inner_size;
         plan->root[i].re = cosf(angle);
         plan->root[i].im = sinf(angle);
+    }
+    {
+        size_t output = 0;
+        size_t length =
+            (plan->inner_levels & 1U) != 0 ? 8 : 4;
+
+        /*
+         * The SSE stage consumes three coefficients per nonzero radix-4
+         * frequency.  Store that exact stream once so execution needs no
+         * multiply or indexed root addressing in the butterfly loop.
+         */
+        while (length < plan->inner_size) {
+            const size_t root_stride =
+                plan->inner_size / (4 * length);
+            size_t k;
+
+            for (k = 1; k < length; ++k) {
+                unsigned multiple;
+                for (multiple = 1; multiple <= 3; ++multiple) {
+                    const fft_complex value =
+                        plan->root[multiple * k * root_stride];
+                    unsigned lane;
+                    for (lane = 0; lane < 4; ++lane) {
+                        plan->replicated_root[output].re[lane] =
+                            value.re;
+                        plan->replicated_root[output].im[lane] =
+                            value.im;
+                    }
+                    ++output;
+                }
+            }
+            length *= 4;
+        }
     }
     {
         unsigned lane;
@@ -103,7 +192,9 @@ void lane4_portable_plan_destroy(lane4_portable_plan *plan)
         return;
     }
     free(plan->permutation);
+    free(plan->mixed_permutation);
     free(plan->root);
+    free(plan->replicated_root);
     free(plan->finish_re);
     free(plan->finish_im);
     free(plan->work);

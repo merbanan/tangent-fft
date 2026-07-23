@@ -19,6 +19,7 @@ typedef struct {
     unsigned max_power;
     double target_ms;
     const char *csv_path;
+    int benchmark_inverse;
 } options;
 
 typedef struct {
@@ -65,8 +66,12 @@ static void fill_random(fft_complex *data, size_t n)
 
 static void reference_dft(const fft_complex *input,
                           reference_complex *output,
-                          size_t n)
+                          size_t n,
+                          int inverse)
 {
+    const long double direction = inverse ? 1.0L : -1.0L;
+    const long double scale =
+        inverse ? 1.0L / (long double)n : 1.0L;
     size_t k;
     for (k = 0; k < n; ++k) {
         long double sum_re = 0.0L;
@@ -74,7 +79,8 @@ static void reference_dft(const fft_complex *input,
         size_t j;
         for (j = 0; j < n; ++j) {
             const long double angle =
-                -2.0L * (long double)HARNESS_PI * (long double)j *
+                direction * 2.0L * (long double)HARNESS_PI *
+                (long double)j *
                 (long double)k / (long double)n;
             const long double c = cosl(angle);
             const long double s = sinl(angle);
@@ -83,8 +89,8 @@ static void reference_dft(const fft_complex *input,
             sum_im += (long double)input[j].re * s +
                       (long double)input[j].im * c;
         }
-        output[k].re = sum_re;
-        output[k].im = sum_im;
+        output[k].re = sum_re * scale;
+        output[k].im = sum_im * scale;
     }
 }
 
@@ -137,7 +143,8 @@ static double relative_max_error_float(const fft_complex *actual,
 
 static int check_vector(size_t n,
                         const fft_complex *input,
-                        double maxima[FFT_ALGORITHM_COUNT])
+                        double maxima[FFT_ALGORITHM_COUNT],
+                        int inverse)
 {
     fft_plan *plan = fft_plan_create(n);
     reference_complex *reference =
@@ -154,7 +161,7 @@ static int check_vector(size_t n,
         return 0;
     }
 
-    reference_dft(input, reference, n);
+    reference_dft(input, reference, n, inverse);
     for (algorithm = 0; algorithm < FFT_ALGORITHM_COUNT; ++algorithm) {
         const fft_algorithm selected = (fft_algorithm)algorithm;
         const double tolerance =
@@ -165,10 +172,13 @@ static int check_vector(size_t n,
             continue;
         }
         memcpy(work, input, n * sizeof(*work));
-        if (fft_execute(plan, selected, work) != 0) {
+        if ((inverse
+                 ? fft_inverse_execute(plan, selected, work)
+                 : fft_execute(plan, selected, work)) != 0) {
             fprintf(stderr,
-                    "%s execution failed for n=%zu\n",
+                    "%s %s execution failed for n=%zu\n",
                     fft_algorithm_name(selected),
+                    inverse ? "inverse" : "forward",
                     n);
             success = 0;
             continue;
@@ -180,9 +190,10 @@ static int check_vector(size_t n,
         }
         if (!isfinite(error) || error > tolerance) {
             fprintf(stderr,
-                    "FAIL: %-16s n=%-5zu relative max error %.3e "
+                    "FAIL: %-16s %-7s n=%-5zu relative max error %.3e "
                     "(limit %.3e)\n",
                     fft_algorithm_name(selected),
+                    inverse ? "inverse" : "forward",
                     n,
                     error,
                     tolerance);
@@ -198,7 +209,8 @@ static int check_vector(size_t n,
 
 static int run_correctness_tests(void)
 {
-    double maxima[FFT_ALGORITHM_COUNT] = {0};
+    double forward_maxima[FFT_ALGORITHM_COUNT] = {0};
+    double inverse_maxima[FFT_ALGORITHM_COUNT] = {0};
     unsigned power;
     int success = 1;
 
@@ -215,13 +227,15 @@ static int run_correctness_tests(void)
 
         /* Deterministic complex random data. */
         fill_random(input, n);
-        success = check_vector(n, input, maxima) && success;
+        success = check_vector(n, input, forward_maxima, 0) && success;
+        success = check_vector(n, input, inverse_maxima, 1) && success;
 
         /* An impulse exercises every output and all twiddle paths. */
         memset(input, 0, n * sizeof(*input));
         input[n > 1 ? n / 3 : 0].re = 0.75;
         input[n > 1 ? n / 3 : 0].im = -0.25;
-        success = check_vector(n, input, maxima) && success;
+        success = check_vector(n, input, forward_maxima, 0) && success;
+        success = check_vector(n, input, inverse_maxima, 1) && success;
 
         /* A structured mixture catches ordering/permutation mistakes. */
         for (i = 0; i < n; ++i) {
@@ -231,14 +245,15 @@ static int run_correctness_tests(void)
             input[i].im =
                 0.3 * cos(2.0 * HARNESS_PI * 2.0 * (double)i / (double)n);
         }
-        success = check_vector(n, input, maxima) && success;
+        success = check_vector(n, input, forward_maxima, 0) && success;
+        success = check_vector(n, input, inverse_maxima, 1) && success;
         free(input);
     }
 
     /*
      * A direct DFT is deliberately limited to small sizes. Exercise the
-     * commonly used larger powers independently by cross-checking the two
-     * recursive decompositions against radix-2.
+     * commonly used larger powers independently by cross-checking every
+     * available forward and inverse path against radix-2.
      */
     for (power = 10; power <= 22; ++power) {
         const size_t n = (size_t)1 << power;
@@ -287,6 +302,33 @@ static int run_correctness_tests(void)
             }
         }
 
+        memcpy(radix, input, n * sizeof(*radix));
+        (void)fft_inverse_execute(plan, FFT_RADIX2, radix);
+        for (algorithm = FFT_SPLIT_RADIX;
+             algorithm <= FFT_FFMPEG;
+             ++algorithm) {
+            const double tolerance =
+                6.0e-6 * (double)power;
+            double error;
+            if (!fft_plan_supports(plan, (fft_algorithm)algorithm)) {
+                continue;
+            }
+            memcpy(work, input, n * sizeof(*work));
+            (void)fft_inverse_execute(
+                plan, (fft_algorithm)algorithm, work);
+            error = relative_max_error_float(work, radix, n);
+            if (!isfinite(error) || error > tolerance) {
+                fprintf(stderr,
+                        "FAIL: %-16s inverse n=%-8zu "
+                        "cross-check error %.3e (limit %.3e)\n",
+                        fft_algorithm_name((fft_algorithm)algorithm),
+                        n,
+                        error,
+                        tolerance);
+                success = 0;
+            }
+        }
+
         fft_plan_destroy(plan);
         free(input);
         free(radix);
@@ -295,11 +337,13 @@ static int run_correctness_tests(void)
 
     if (success) {
         int algorithm;
-        printf("PASS: direct DFT through 512; cross-checks through 2^22\n");
+        printf("PASS: forward/inverse direct DFT through 512; "
+               "cross-checks through 2^22\n");
         for (algorithm = 0; algorithm < FFT_ALGORITHM_COUNT; ++algorithm) {
-            printf("  %-16s worst relative max error: %.3e\n",
+            printf("  %-16s worst error: forward %.3e, inverse %.3e\n",
                    fft_algorithm_name((fft_algorithm)algorithm),
-                   maxima[algorithm]);
+                   forward_maxima[algorithm],
+                   inverse_maxima[algorithm]);
         }
     }
     return success;
@@ -321,7 +365,8 @@ static int compare_doubles(const void *left, const void *right)
 static benchmark_result benchmark_algorithm(fft_plan *plan,
                                             fft_algorithm algorithm,
                                             const fft_complex *input,
-                                            double target_seconds)
+                                            double target_seconds,
+                                            int inverse)
 {
     const size_t n = fft_plan_size(plan);
     const size_t maximum_samples = 16384;
@@ -331,7 +376,8 @@ static benchmark_result benchmark_algorithm(fft_plan *plan,
     benchmark_result result = {0.0, 0.0, 0, 0.0};
     double total = 0.0;
     size_t count = 0;
-    size_t warmup;
+    struct timespec warm_start;
+    struct timespec warm_now;
 
     if (work == NULL || samples == NULL) {
         free(work);
@@ -339,10 +385,21 @@ static benchmark_result benchmark_algorithm(fft_plan *plan,
         return result;
     }
 
-    for (warmup = 0; warmup < 2; ++warmup) {
+    /*
+     * Warm every implementation independently.  Two calls were insufficient
+     * to settle the host frequency policy and made identical assembly aliases
+     * appear different merely because of benchmark order.
+     */
+    clock_gettime(CLOCK_MONOTONIC, &warm_start);
+    do {
         memcpy(work, input, n * sizeof(*work));
-        (void)fft_execute(plan, algorithm, work);
-    }
+        if (inverse) {
+            (void)fft_inverse_execute(plan, algorithm, work);
+        } else {
+            (void)fft_execute(plan, algorithm, work);
+        }
+        clock_gettime(CLOCK_MONOTONIC, &warm_now);
+    } while (seconds_between(warm_start, warm_now) < 0.02);
 
     while ((total < target_seconds || count < 7) &&
            count < maximum_samples) {
@@ -352,7 +409,11 @@ static benchmark_result benchmark_algorithm(fft_plan *plan,
 
         memcpy(work, input, n * sizeof(*work));
         clock_gettime(CLOCK_MONOTONIC, &start);
-        (void)fft_execute(plan, algorithm, work);
+        if (inverse) {
+            (void)fft_inverse_execute(plan, algorithm, work);
+        } else {
+            (void)fft_execute(plan, algorithm, work);
+        }
         clock_gettime(CLOCK_MONOTONIC, &end);
         elapsed = seconds_between(start, end);
         samples[count++] = elapsed;
@@ -374,6 +435,34 @@ static benchmark_result benchmark_algorithm(fft_plan *plan,
     return result;
 }
 
+static int warm_benchmark_cpu(fft_plan *plan,
+                              const fft_complex *input)
+{
+    const size_t n = fft_plan_size(plan);
+    const double warm_seconds = 0.05;
+    fft_complex *work =
+        (fft_complex *)malloc(n * sizeof(*work));
+    const fft_algorithm algorithm =
+        fft_plan_supports(plan, FFT_LANE4_AVX2_FMA)
+            ? FFT_LANE4_AVX2_FMA
+            : FFT_RADIX2;
+    struct timespec start;
+    struct timespec now;
+
+    if (work == NULL) {
+        return 0;
+    }
+    clock_gettime(CLOCK_MONOTONIC, &start);
+    do {
+        memcpy(work, input, n * sizeof(*work));
+        (void)fft_execute(plan, algorithm, work);
+        clock_gettime(CLOCK_MONOTONIC, &now);
+    } while (seconds_between(start, now) < warm_seconds);
+    benchmark_sink += work[(n * 3) / 7].re;
+    free(work);
+    return 1;
+}
+
 static int run_benchmarks(const options *settings)
 {
     FILE *csv = NULL;
@@ -393,7 +482,9 @@ static int run_benchmarks(const options *settings)
                 "theoretical_flops,speedup_vs_radix2,checksum\n");
     }
 
-    printf("\nBenchmarks (median execution time; plan/setup excluded)\n");
+    printf("\n%s benchmarks "
+           "(median execution time; plan/setup excluded)\n",
+           settings->benchmark_inverse ? "Inverse" : "Forward");
     printf("FFmpeg AVTX is reported through N=131072, its direct optimized "
            "x86 kernel range.\n");
     printf("%10s  %-16s %12s %10s %14s %11s %8s\n",
@@ -424,6 +515,16 @@ static int run_benchmarks(const options *settings)
         }
 
         fill_random(input, n);
+        if (!warm_benchmark_cpu(plan, input)) {
+            fprintf(stderr,
+                    "warm-up allocation failed for n=%zu\n", n);
+            fft_plan_destroy(plan);
+            free(input);
+            if (csv != NULL) {
+                fclose(csv);
+            }
+            return 0;
+        }
         for (algorithm = 0; algorithm < FFT_ALGORITHM_COUNT; ++algorithm) {
             if (!fft_plan_supports(plan, (fft_algorithm)algorithm)) {
                 continue;
@@ -432,7 +533,8 @@ static int run_benchmarks(const options *settings)
                 plan,
                 (fft_algorithm)algorithm,
                 input,
-                settings->target_ms / 1000.0);
+                settings->target_ms / 1000.0,
+                settings->benchmark_inverse);
             if (results[algorithm].samples == 0) {
                 fprintf(stderr,
                         "benchmark allocation failed for n=%zu\n",
@@ -454,8 +556,11 @@ static int run_benchmarks(const options *settings)
             }
 
             {
-                const uint64_t flops =
+                uint64_t flops =
                     fft_theoretical_flops(selected, n);
+                if (settings->benchmark_inverse && flops != 0) {
+                    flops += 2 * n;
+                }
                 const double speedup =
                     radix_time / results[algorithm].median_seconds;
                 const double gflops =
@@ -520,6 +625,7 @@ static void print_usage(const char *program)
     printf("  --max-power P      largest size is 2^P (default: 22)\n");
     printf("  --target-ms MS     timing budget per algorithm/size (default: 100)\n");
     printf("  --csv PATH         also write machine-readable benchmark results\n");
+    printf("  --inverse          benchmark normalized inverse transforms\n");
     printf("  --help             show this help\n");
 }
 
@@ -561,6 +667,7 @@ static int parse_options(int argc, char **argv, options *settings)
     settings->max_power = 13;
     settings->target_ms = 100.0;
     settings->csv_path = NULL;
+    settings->benchmark_inverse = 0;
 
     for (i = 1; i < argc; ++i) {
         if (strcmp(argv[i], "--test") == 0) {
@@ -586,6 +693,8 @@ static int parse_options(int argc, char **argv, options *settings)
             }
         } else if (strcmp(argv[i], "--csv") == 0 && i + 1 < argc) {
             settings->csv_path = argv[++i];
+        } else if (strcmp(argv[i], "--inverse") == 0) {
+            settings->benchmark_inverse = 1;
         } else if (strcmp(argv[i], "--help") == 0) {
             print_usage(argv[0]);
             exit(EXIT_SUCCESS);

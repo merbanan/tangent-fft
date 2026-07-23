@@ -13,9 +13,8 @@ HOST_ARCH := $(shell uname -m)
 
 ifeq ($(HOST_ARCH),x86_64)
 CPPFLAGS += -DHAVE_TANGENT_X86_ASM=1
-LANE4_X86_OBJECTS := lane4_sse.o lane4_sse2.o lane4_sse3.o lane4_ssse3.o \
-	lane4_sse41.o lane4_sse42.o lane4_avx.o lane4_avx_fma.o \
-	lane4_avx2.o lane4_fft.o
+LANE4_X86_OBJECTS := lane4_avx.o lane4_avx_fma.o \
+	lane4_avx2.o lane4_fft.o lane4_sse_stage.o
 CORE_OBJECTS += tangent_x86_kernel.o $(LANE4_X86_OBJECTS)
 OBJECTS += tangent_x86_kernel.o $(LANE4_X86_OBJECTS)
 else
@@ -56,38 +55,13 @@ lane4_avx2.o: lane4_fft.c lane4_fft.h fft.h
 	$(CC) $(CFLAGS) $(CPPFLAGS) -mavx2 -mno-fma \
 		-DLANE4_BUILD_AVX2=1 -c -o $@ $<
 
-lane4_sse.o: lane4_sse.c lane4_portable.h \
-	lane4_portable_internal.h fft.h
-	$(CC) $(CFLAGS) $(CPPFLAGS) -msse -mno-sse2 -mno-avx \
-		-DLANE4_SSE_EXECUTE=lane4_sse_execute -c -o $@ $<
-
-lane4_sse2.o: lane4_sse.c lane4_portable.h \
-	lane4_portable_internal.h fft.h
-	$(CC) $(CFLAGS) $(CPPFLAGS) -msse2 -mno-avx \
-		-DLANE4_SSE_EXECUTE=lane4_sse2_execute -c -o $@ $<
-
-lane4_sse3.o: lane4_sse.c lane4_portable.h \
-	lane4_portable_internal.h fft.h
-	$(CC) $(CFLAGS) $(CPPFLAGS) -msse3 -mno-avx \
-		-DLANE4_SSE_EXECUTE=lane4_sse3_execute -c -o $@ $<
-
-lane4_ssse3.o: lane4_sse.c lane4_portable.h \
-	lane4_portable_internal.h fft.h
-	$(CC) $(CFLAGS) $(CPPFLAGS) -mssse3 -mno-avx \
-		-DLANE4_SSE_EXECUTE=lane4_ssse3_execute -c -o $@ $<
-
-lane4_sse41.o: lane4_sse.c lane4_portable.h \
-	lane4_portable_internal.h fft.h
-	$(CC) $(CFLAGS) $(CPPFLAGS) -msse4.1 -mno-avx \
-		-DLANE4_SSE_EXECUTE=lane4_sse41_execute -c -o $@ $<
-
-lane4_sse42.o: lane4_sse.c lane4_portable.h \
-	lane4_portable_internal.h fft.h
-	$(CC) $(CFLAGS) $(CPPFLAGS) -msse4.2 -mno-avx \
-		-DLANE4_SSE_EXECUTE=lane4_sse42_execute -c -o $@ $<
-
 tangent_x86_kernel.o: tangent_x86_kernel.asm
 	$(NASM) -f elf64 -g -F dwarf -o $@ $<
+
+lane4_sse_stage.o: lane4_sse_stage.asm \
+	third_party/ffmpeg/libavutil/x86/x86inc.asm .ffmpeg-build/config.asm
+	$(NASM) -f elf64 -g -F dwarf -Ithird_party/ffmpeg/ \
+		-P.ffmpeg-build/config.asm -o $@ $<
 
 $(FFMPEG_LIB): scripts/build_ffmpeg.sh \
 	third_party/ffmpeg/libavutil/x86/tx_float.asm
@@ -122,4 +96,5 @@ debug: clean $(TARGET)
 
 clean:
 	$(RM) $(TARGET) $(OBJECTS) analysis/ffmpeg_cycles \
-		analysis/lane4_experiment
+		analysis/lane4_experiment lane4_sse.o lane4_sse2.o \
+		lane4_sse3.o lane4_ssse3.o lane4_sse41.o lane4_sse42.o

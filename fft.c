@@ -2270,6 +2270,38 @@ int fft_execute(fft_plan *plan, fft_algorithm algorithm, fft_complex *data)
     }
 }
 
+int fft_inverse_execute(fft_plan *plan,
+                        fft_algorithm algorithm,
+                        fft_complex *data)
+{
+    size_t low;
+    const size_t n = fft_plan_size(plan);
+    const float scale = n == 0 ? 0.0f : 1.0f / (float)n;
+
+    if (n == 0 || data == NULL ||
+        fft_execute(plan, algorithm, data) != 0) {
+        return -1;
+    }
+
+    data[0].re *= scale;
+    data[0].im *= scale;
+    for (low = 1; low < (n + 1) / 2; ++low) {
+        const size_t high = n - low;
+        const fft_complex low_value = data[low];
+        const fft_complex high_value = data[high];
+
+        data[low].re = high_value.re * scale;
+        data[low].im = high_value.im * scale;
+        data[high].re = low_value.re * scale;
+        data[high].im = low_value.im * scale;
+    }
+    if ((n & 1U) == 0) {
+        data[n / 2].re *= scale;
+        data[n / 2].im *= scale;
+    }
+    return 0;
+}
+
 const char *fft_algorithm_name(fft_algorithm algorithm)
 {
     switch (algorithm) {

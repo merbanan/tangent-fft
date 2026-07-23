@@ -2,8 +2,10 @@
 
 ## 1. What the algorithm is
 
-`lane4` is a single-precision, forward, complex FFT for power-of-two lengths.
-It is not a new asymptotic FFT identity: mathematically it is a
+`lane4` is a single-precision complex FFT for power-of-two lengths. Its core
+kernel computes the forward transform; a normalized inverse API reuses that
+kernel through exact DFT index symmetry. It is not a new asymptotic FFT
+identity: mathematically it is a
 Cooley--Tukey decomposition of a length-`N` DFT into four length-`N/4`
 transforms followed by `N/4` length-4 transforms.
 
@@ -21,8 +23,9 @@ What is distinctive is the implementation:
 
 The optimized implementation is named `lane4-avx2-fma`. The AVX, AVX+FMA,
 AVX2, and AVX2+FMA entries compile the same 256-bit source at explicit ISA
-boundaries. Plain-C and 128-bit SSE versions implement the same outer lane
-factorization with a simpler radix-2 inner FFT.
+boundaries. Plain C retains a simpler radix-2 inner FFT. The 128-bit variants
+use FFmpeg-style x86inc/NASM assembly with FFT4/FFT8 leaves, block-major
+radix-4 stages, and an assembly transpose/twiddle/FFT4 finish.
 
 All samples, roots, twiddles, finish factors, and arithmetic used by the
 algorithm are `float`. Wider types appear only in the correctness reference
@@ -154,6 +157,34 @@ This gives the complete algorithm:
 
 Nothing approximate has been introduced. This is an algebraic
 refactorization of the original DFT.
+
+### 3.1 Inverse transform
+
+The normalized inverse is
+
+```text
+x[j] = (1/N) sum(k=0..N-1) X[k] exp(+2 pi i j k/N).
+```
+
+Changing the sign in the exponential is equivalent to evaluating the forward
+DFT at the negated frequency:
+
+```text
+IDFT(X)[j] = DFT(X)[(-j) mod N] / N.
+```
+
+`fft_inverse_execute` therefore:
+
+1. calls the selected tuned forward implementation unchanged;
+2. keeps output zero in place;
+3. swaps output pairs `k` and `N-k`;
+4. multiplies every real and imaginary component by `1/N`.
+
+The reversal and normalization are combined into one in-place `O(N)` pass.
+This approach automatically provides an inverse for plain C, every SSE/AVX
+lane4 version, tangent FFT, radix-2, split-radix, and FFmpeg without adding
+direction branches to their hot butterfly loops. It is mathematically exact
+apart from the normal float rounding of the forward transform and scaling.
 
 ## 4. Why four complex values fit naturally in AVX
 
@@ -423,23 +454,43 @@ row.im[4].
 The plain-C object contains no intrinsics and is built with automatic
 vectorization disabled. This makes it a genuine algorithmic scalar baseline.
 
-The SSE source maps `row.re` and `row.im` to two 128-bit vectors. Thus each
-inner butterfly still evaluates all four residue transforms in parallel,
-although a complex row requires two registers rather than one YMM register.
-The finish loads four rows, applies a 4-by-4 transpose to the real vectors and
-another to the imaginary vectors, applies finish factors, and runs the same
-vertical FFT4.
+Despite using radix-2 for its inner transforms, `lane4-c` is faster than this
+repository's conventional radix-2 implementation because:
 
-These portable/SSE versions currently use a radix-2 inner FFT with a
-bit-reversed input permutation. They preserve the outer lane4 decomposition
-but do not include the large straight-line radix-4 codelets of the optimized
-AVX source.
+- each twiddle load and each `start/k` loop iteration serves four independent
+  butterflies;
+- the fixed four-lane scalar loop exposes independent instruction-level
+  parallelism;
+- the input permutation is precomputed, whereas conventional radix-2
+  dynamically calculates bit reversal and performs conditional swaps;
+- lane4 uses one uniform complex multiply, whereas the comparison radix-2
+  dispatches through a classified-root switch inside each butterfly;
+- the batched final FFT4 produces natural-order output directly.
 
-SSE, SSE2, SSE3, SSSE3, SSE4.1, and SSE4.2 are compiled as separate
-ISA-bounded objects. For this split real/imag float loop, the later revisions
-do not add a better packed arithmetic operation, so the compiler emits the
-same core SSE sequence. Their near-identical timings are expected, not a
-harness error.
+Thus the gain comes from amortized control, address generation, permutation,
+and table traffic rather than a better asymptotic operation count.
+
+The SSE representation maps `row.re` and `row.im` to two 128-bit vectors.
+Each inner butterfly therefore evaluates all four residue transforms in
+parallel, although a complex row needs two registers rather than one YMM
+register. Unlike the scalar version, it uses a mixed-radix digit permutation,
+fused FFT4/FFT8 assembly leaves, and block-major radix-4 upper stages.
+Replicated real/imaginary roots let the hot loop consume aligned vector
+operands without scalar broadcast shuffles. Its finish kernel loads four
+rows, transposes the real and imaginary vectors, applies finish factors, runs
+the vertical FFT4, and stores natural-order interleaved output.
+
+The public transform scheduler, arithmetic, and hot-path data movement are in
+`lane4_sse_stage.asm`, written with FFmpeg's vendored x86inc conventions.
+Planning, allocation, outer algorithm selection, and benchmarking remain C.
+The assembly uses stage-major root streams, linear row pointers, exact-root
+sign folds, and a register-resident FFT8 that occupies all sixteen XMM
+registers.
+
+SSE, SSE2, SSE3, SSSE3, SSE4.1, and SSE4.2 retain separate runtime feature
+and API names. For this split real/imag float loop, the later revisions add
+no better packed arithmetic operation, so all six names alias the same SSE1
+assembly body. Their near-identical timings are expected.
 
 ## 9. Work, memory, and output properties
 
@@ -461,20 +512,23 @@ N bytes    mixed-radix permutation
 ```
 
 This is roughly `23N` bytes plus allocator and plan metadata. Planning and
-allocation are outside benchmark timing.
+allocation are outside benchmark timing. The shared portable/SSE plan uses a
+different layout: about `8N` work, `6N` finish factors, `2N` ordinary roots,
+`8N` stage-major replicated roots, and `2N` permutations, or about `26N`
+bytes.
 
-The API is in-place, but execution uses the plan's work array. Output is the
-conventional natural-order, unnormalised forward DFT. The current
-implementation supports:
+The API is in-place, but execution uses the plan's work array. Forward output
+is the conventional natural-order, unnormalised DFT; inverse output is
+natural-order and normalized by `1/N`. The current implementation supports:
 
 ```text
 power-of-two N
 16 <= N <= 131072
 complex float input
-forward transform only
+forward and inverse transforms
 ```
 
-There is no inverse or real-input specialization yet.
+There is no real-input specialization yet.
 
 ## 10. Why it is fast despite not minimizing arithmetic
 
@@ -507,12 +561,13 @@ The relevant files are:
 ```text
 lane4_fft.c                    optimized 256-bit radix-4 implementation
 lane4_portable.c               plain-C implementation and shared plan
-lane4_sse.c                    128-bit SSE implementation template
+lane4_sse_stage.asm            complete x86inc/NASM SSE execution path
 fft.c / fft.h                  API selection and runtime ISA checks
 Makefile                       explicit per-ISA compilation boundaries
 docs/lane-factorized-fft.md    optimization history and cycle results
 docs/lane4-isa-variants.md     ISA comparison and benchmark summary
 benchmark-simd.csv             raw common-harness measurements
+benchmark-inverse.csv          normalized inverse measurements
 ```
 
 Reproduce the validation and benchmark with:
@@ -523,9 +578,11 @@ make
 make test
 taskset -c 2 ./fft_harness --bench --min-power 4 --max-power 13 \
   --target-ms 1000 --csv benchmark-simd.csv
+taskset -c 2 ./fft_harness --bench --inverse --min-power 4 --max-power 13 \
+  --target-ms 1000 --csv benchmark-inverse.csv
 ```
 
-The correctness harness compares every implementation against a
-long-double direct DFT through 512, then cross-checks larger supported sizes
-against the independent radix-2 implementation. ASan and UBSan builds also
-pass the complete suite.
+The correctness harness compares every forward and inverse implementation
+against a long-double direct DFT through 512, then cross-checks larger
+supported sizes against the independent radix-2 implementation. ASan and
+UBSan builds also pass the complete suite.

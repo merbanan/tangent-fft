@@ -52,6 +52,17 @@ int fft_plan_supports(const fft_plan *plan, fft_algorithm algorithm);
  */
 int fft_execute(fft_plan *plan, fft_algorithm algorithm, fft_complex *data);
 
+/*
+ * Computes the conventional normalized inverse DFT:
+ *
+ *   x[j] = (1/n) sum_k X[k] exp(+2*pi*i*j*k/n)
+ *
+ * The transform is performed in-place. Returns 0 on success.
+ */
+int fft_inverse_execute(fft_plan *plan,
+                        fft_algorithm algorithm,
+                        fft_complex *data);
+
 const char *fft_algorithm_name(fft_algorithm algorithm);
 
 /*

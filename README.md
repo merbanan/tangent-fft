@@ -1,7 +1,7 @@
 # Tangent FFT comparison
 
-This repository contains sixteen single-precision, forward, complex FFT
-benchmark entries:
+This repository contains sixteen single-precision complex FFT benchmark
+entries, each supporting forward and normalized inverse transforms:
 
 - iterative radix-2 Cooley–Tukey in C;
 - recursive conjugate-pair split-radix in C;
@@ -9,7 +9,9 @@ benchmark entries:
 - `tangent-x86-asm`, an AVX2/FMA tangent FFT for x86-64;
 - `lane4-c`, a plain-C lane-factorized FFT compiled with automatic
   vectorization disabled;
-- lane4 kernels for SSE, SSE2, SSE3, SSSE3, SSE4.1, SSE4.2, AVX,
+- a complete FFmpeg-style x86inc/NASM lane4 SSE execution path, exposed at
+  SSE, SSE2, SSE3, SSSE3, SSE4.1, and SSE4.2 runtime boundaries;
+- lane4 kernels for AVX,
   AVX+FMA, AVX2, and AVX2+FMA;
 - FFmpeg `libavutil` AVTX, built locally from pinned source.
 
@@ -18,6 +20,12 @@ factors. All compute the conventional unnormalised transform
 
 ```text
 X[k] = sum_j x[j] exp(-2*pi*i*j*k/N).
+```
+
+The inverse API computes
+
+```text
+x[j] = (1/N) sum_k X[k] exp(+2*pi*i*j*k/N).
 ```
 
 ## Reproducible build and benchmark
@@ -42,6 +50,7 @@ remain available:
 
 ```sh
 ./fft_harness --bench --min-power 4 --max-power 13 --target-ms 1000
+./fft_harness --bench --inverse --min-power 4 --max-power 13
 ./fft_harness --bench --min-power 4 --max-power 22 --csv benchmark.csv
 ./fft_harness --help
 ```
@@ -60,8 +69,9 @@ available on other targets.
 For `N=4M`, every lane4 implementation computes the four length-`M`
 transforms from `x[4m+r]` in parallel. The plain-C implementation makes the
 decomposition explicit. The SSE family uses separate four-float real and
-imaginary vectors. The 256-bit family treats each YMM register as four
-interleaved complex lanes.
+imaginary vectors; its FFT4/FFT8 leaves, radix-4 stages, and fused finish are
+FFmpeg-style x86inc/NASM assembly. The 256-bit family treats each YMM register
+as four interleaved complex lanes.
 
 The tuned `lane4-avx2-fma` kernel
 computes the four length-`M` transforms from `x[4m+r]` simultaneously. Its
@@ -171,10 +181,9 @@ portable constants.
 
 ## Validation and FFmpeg's own harness
 
-`make test` compares every path, for three input families and every power of
-two through 512, against a direct DFT accumulated in `long double`. It then
-cross-checks through `2^22`. The current worst relative error for
-`tangent-x86-asm` is `1.413e-07`.
+`make test` compares every forward and inverse path, for three input families
+and every power of two through 512, against a direct DFT accumulated in
+`long double`. It then cross-checks both directions through `2^22`.
 
 FFmpeg does have an FFT test/benchmark harness:
 `third_party/ffmpeg/tests/checkasm/av_tx.c`. It checks AVTX implementations

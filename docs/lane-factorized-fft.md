@@ -3,7 +3,7 @@
 ## Outcome
 
 The resulting optimized algorithm is `lane4-avx2-fma` (formerly reported as
-`lane4-radix4`), a float-only, forward complex FFT
+`lane4-radix4`), a float-only complex FFT
 for power-of-two sizes. On the test host it is faster than this repository's
 split-radix C, tangent C, tangent AVX2 assembly, and patched FFmpeg AVTX paths
 at every measured size from 16 through 8192. It remains faster through its
@@ -251,9 +251,9 @@ the `8N`-byte work array.
 This optimized implementation requires x86-64 AVX2 and FMA and is currently
 exposed for `16 <= N <= 131072`. The same decomposition also has plain-C and
 runtime-gated SSE-through-AVX2 implementations, described in
-`lane4-isa-variants.md`. It supports only power-of-two complex forward
-transforms and natural-order output. There is no inverse or real-input
-specialization yet.
+`lane4-isa-variants.md`. It supports power-of-two complex forward transforms
+and normalized inverse transforms with natural-order output. There is no
+real-input specialization yet.
 
 At substantially larger sizes, cache blocking or a recursive six-step
 version of the inner vector transform may reduce work-array traffic. On
@@ -273,8 +273,10 @@ The design search used these established ideas:
 - the earlier tangent work in this repository, especially the lesson that
   low arithmetic count does not compensate for irregular dataflow.
 
-The final decomposition and C intrinsics implementation were written for this
-repository; source was not copied from PFFFT or FFTS.
+The final decomposition and implementations were written for this
+repository; source was not copied from PFFFT or FFTS. The 128-bit port now
+uses FFmpeg-style x86inc/NASM assembly and is measured separately in
+`lane4-isa-variants.md`.
 
 Primary references:
 
