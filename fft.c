@@ -4,6 +4,7 @@
 #if HAVE_TANGENT_X86_ASM
 #include "lane2_sse.h"
 #include "lane4_fft.h"
+#include "lane8_avx.h"
 #include "tangent_sse_asm.h"
 #include "tangent_x86_asm.h"
 #endif
@@ -96,6 +97,7 @@ struct fft_plan {
     lane4_avx_fft_plan *lane4_avx;
     lane4_avx_fma_fft_plan *lane4_avx_fma;
     lane4_avx2_fft_plan *lane4_avx2;
+    lane8_avx_plan *lane8_avx;
 #endif
     uint32_t *tangent_permutation;
     uint32_t **blocked_permutation;
@@ -1074,6 +1076,9 @@ fft_plan *fft_plan_create(size_t n)
              (LANE4_CPU_AVX2 | LANE4_CPU_FMA)) ==
                 (LANE4_CPU_AVX2 | LANE4_CPU_FMA)) {
             plan->lane4 = lane4_fft_plan_create(n);
+            if (n >= 32) {
+                plan->lane8_avx = lane8_avx_plan_create(n);
+            }
         }
 #endif
     }
@@ -1099,7 +1104,8 @@ fft_plan *fft_plan_create(size_t n)
          (plan->lane4_cpu_features &
           (LANE4_CPU_AVX2 | LANE4_CPU_FMA)) ==
              (LANE4_CPU_AVX2 | LANE4_CPU_FMA) &&
-         plan->lane4 == NULL) ||
+         (plan->lane4 == NULL ||
+          (n >= 32 && plan->lane8_avx == NULL))) ||
 #endif
         !create_scale_tables(plan) ||
         !create_transform_tables(plan) ||
@@ -1127,6 +1133,7 @@ void fft_plan_destroy(fft_plan *plan)
     lane4_avx_fft_plan_destroy(plan->lane4_avx);
     lane4_avx_fma_fft_plan_destroy(plan->lane4_avx_fma);
     lane4_avx2_fft_plan_destroy(plan->lane4_avx2);
+    lane8_avx_plan_destroy(plan->lane8_avx);
 #endif
     free_float_table(plan->scale, plan->table_levels);
     free_constant_table(plan->root, plan->table_levels);
@@ -1237,6 +1244,22 @@ int fft_plan_supports(const fft_plan *plan, fft_algorithm algorithm)
     if (algorithm == FFT_LANE4_AVX2_FMA) {
 #if HAVE_TANGENT_X86_ASM
         return plan->lane4 != NULL;
+#else
+        return 0;
+#endif
+    }
+    if (algorithm == FFT_LANE8_AVX2_FMA) {
+#if HAVE_TANGENT_X86_ASM
+        return plan->tangent_x86_asm_available &&
+               (plan->n == 16 || plan->lane8_avx != NULL);
+#else
+        return 0;
+#endif
+    }
+    if (algorithm == FFT_HW_SSE) {
+#if HAVE_TANGENT_X86_ASM
+        return plan->lane4_portable != NULL && plan->lane2_sse != NULL &&
+               (plan->lane4_cpu_features & LANE4_CPU_SSE) != 0;
 #else
         return 0;
 #endif
@@ -2542,6 +2565,16 @@ int fft_execute(fft_plan *plan, fft_algorithm algorithm, fft_complex *data)
         return lane4_fft_execute(plan->lane4, data);
     case FFT_LANE2_SSE:
         return lane2_sse_execute(plan->lane2_sse, data);
+    case FFT_LANE8_AVX2_FMA:
+        if (plan->n == 16) {
+            tangent_fft_scheduled(plan, data, 1);
+            return 0;
+        }
+        return lane8_avx_execute(plan->lane8_avx, data);
+    case FFT_HW_SSE:
+        return plan->n <= 64
+                   ? lane2_sse_execute(plan->lane2_sse, data)
+                   : lane4_sse_execute(plan->lane4_portable, data);
 #else
     case FFT_LANE4_SSE:
     case FFT_LANE4_SSE2:
@@ -2646,6 +2679,10 @@ const char *fft_algorithm_name(fft_algorithm algorithm)
         return "lane2-sse";
     case FFT_FFMPEG:
         return "ffmpeg-avtx";
+    case FFT_LANE8_AVX2_FMA:
+        return "lane8-avx2-fma";
+    case FFT_HW_SSE:
+        return "hw-sse-auto";
     default:
         return "unknown";
     }

@@ -1,5 +1,14 @@
 # The lane4 FFT algorithm
 
+The repository now also contains an `N=8M` split-complex AVX2/FMA
+decomposition and a size-adaptive SSE top-level path. Their mathematical
+derivation, assembly dataflow, direct-form machine-operation bound, and
+benchmarks are documented in
+[`docs/hardware-top-level-fft.md`](docs/hardware-top-level-fft.md). Lane8 is
+kept separate from lane4 because its eight-residue split layout makes a
+different hardware tradeoff; it is not a rename of the algorithm described
+below.
+
 ## 1. What the algorithm is
 
 `lane4` is a single-precision complex FFT for power-of-two lengths. Its core

@@ -1,6 +1,6 @@
 # Tangent FFT comparison
 
-This repository contains twenty-three single-precision complex FFT benchmark
+This repository contains twenty-five single-precision complex FFT benchmark
 entries, each supporting forward and normalized inverse transforms:
 
 - iterative radix-2 Cooley–Tukey in C;
@@ -15,6 +15,9 @@ entries, each supporting forward and normalized inverse transforms:
   SSE, SSE2, SSE3, SSSE3, SSE4.1, and SSE4.2 runtime boundaries;
 - `lane2-sse`, a baseline-SSE assembly FFT that packs two complete
   interleaved complex values in each XMM register;
+- `lane8-avx2-fma`, a handwritten-assembly `N=8M` decomposition with eight
+  split-complex residue transforms per YMM pair;
+- `hw-sse-auto`, a measured lane2/lane4 SSE assembly crossover dispatcher;
 - lane4 kernels for AVX,
   AVX+FMA, AVX2, and AVX2+FMA;
 - FFmpeg `libavutil` AVTX, built locally from pinned source.
@@ -42,6 +45,7 @@ make ffmpeg-cycles
 make tangent-cycles
 make lane2-cycles
 make lane4-experiment
+make lane8-profile
 ```
 
 The repository includes the pinned FFmpeg source. The build produces a local
@@ -104,6 +108,11 @@ The per-ISA organization, compiler boundaries, and comparative measurements
 are in [`docs/lane4-isa-variants.md`](docs/lane4-isa-variants.md).
 A detailed derivation, execution walkthrough, and literature lineage are in
 [`description.md`](description.md).
+The separate lane8 AVX and size-adaptive SSE top-level designs, their local
+machine-operation bounds, assembly layout, and measured limits are in
+[`docs/hardware-top-level-fft.md`](docs/hardware-top-level-fft.md).
+Measured top-level candidates that were not retained are recorded in
+[`docs/rejected-top-level-experiments.md`](docs/rejected-top-level-experiments.md).
 
 ## Tangent implementation structure
 

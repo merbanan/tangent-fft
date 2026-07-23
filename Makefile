@@ -17,9 +17,9 @@ LANE4_X86_OBJECTS := lane4_avx.o lane4_avx_fma.o \
 	lane4_avx2.o lane4_fft.o lane4_sse_stage.o
 LANE2_X86_OBJECTS := lane2_sse.o lane2_sse_stage.o
 CORE_OBJECTS += tangent_x86_kernel.o tangent_sse_stage.o \
-	$(LANE4_X86_OBJECTS) $(LANE2_X86_OBJECTS)
+	$(LANE4_X86_OBJECTS) $(LANE2_X86_OBJECTS) lane8_avx.o lane8_avx_stage.o
 OBJECTS += tangent_x86_kernel.o tangent_sse_stage.o \
-	$(LANE4_X86_OBJECTS) $(LANE2_X86_OBJECTS)
+	$(LANE4_X86_OBJECTS) $(LANE2_X86_OBJECTS) lane8_avx.o lane8_avx_stage.o
 else
 CPPFLAGS += -DHAVE_TANGENT_X86_ASM=0
 endif
@@ -27,7 +27,7 @@ endif
 CPPFLAGS += -I. -Ithird_party/ffmpeg -I.ffmpeg-build
 
 .PHONY: all clean test bench debug ffmpeg ffmpeg-cycles tangent-cycles \
-	lane2-cycles lane4-experiment
+	lane2-cycles lane4-experiment lane8-profile
 .NOTPARALLEL: debug
 
 all: $(TARGET)
@@ -46,6 +46,14 @@ lane4_portable.o: lane4_portable.c lane4_portable.h \
 
 lane2_sse.o: lane2_sse.c lane2_sse.h fft.h
 	$(CC) $(CFLAGS) $(CPPFLAGS) -fno-tree-vectorize -c -o $@ $<
+
+lane8_avx.o: lane8_avx.c lane8_avx.h lane8_avx_internal.h fft.h
+	$(CC) $(CFLAGS) $(CPPFLAGS) -fno-tree-vectorize -c -o $@ $<
+
+lane8_avx_stage.o: lane8_avx.asm \
+	third_party/ffmpeg/libavutil/x86/x86inc.asm .ffmpeg-build/config.asm
+	$(NASM) -f elf64 -g -F dwarf -Ithird_party/ffmpeg/ \
+		-P.ffmpeg-build/config.asm -o $@ $<
 
 lane4_fft.o: lane4_fft.c lane4_fft.h fft.h
 	$(CC) $(CFLAGS) $(CPPFLAGS) -mavx2 -mfma -c -o $@ $<
@@ -114,9 +122,16 @@ analysis/ffmpeg_cycles: analysis/ffmpeg_cycles.c ffmpeg_fft.o $(FFMPEG_LIB)
 lane4-experiment: analysis/lane4_experiment
 	taskset -c 2 ./analysis/lane4_experiment
 
+lane8-profile: analysis/lane8_profile
+	taskset -c 2 ./analysis/lane8_profile
+
 analysis/lane4_experiment: analysis/lane4_experiment.c $(CORE_OBJECTS) $(FFMPEG_LIB)
 	$(CC) $(CFLAGS) $(CPPFLAGS) -mavx2 -mfma $(LDFLAGS) -o $@ $< \
 		$(CORE_OBJECTS) $(FFMPEG_LIB) $(LDLIBS)
+
+analysis/lane8_profile: analysis/lane8_profile.c lane8_avx.o lane8_avx_stage.o
+	$(CC) $(CFLAGS) $(CPPFLAGS) $(LDFLAGS) -o $@ $< \
+		lane8_avx.o lane8_avx_stage.o $(LDLIBS)
 
 debug: CFLAGS := -O0 -g3 -std=c11 -Wall -Wextra -Wpedantic \
 	-fsanitize=address,undefined
@@ -127,5 +142,6 @@ clean:
 	$(RM) $(TARGET) $(OBJECTS) analysis/ffmpeg_cycles \
 		analysis/tangent_cycles analysis/lane2_cycles \
 		analysis/lane4_experiment \
+		analysis/lane8_profile \
 		lane4_sse.o lane4_sse2.o \
 		lane4_sse3.o lane4_ssse3.o lane4_sse41.o lane4_sse42.o
