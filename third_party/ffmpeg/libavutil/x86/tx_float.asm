@@ -83,11 +83,14 @@ s8_mult_odd:   dd 1.0, 1.0, -1.0, 1.0, -M_SQRT1_2, -M_SQRT1_2, M_SQRT1_2, M_SQRT
 s8_perm_even:  dd 1, 3, 0, 2, 1, 3, 2, 0
 s8_perm_odd1:  dd 3, 3, 1, 1, 1, 1, 3, 3
 s8_perm_odd2:  dd 1, 2, 0, 3, 1, 0, 0, 1
+s8_sign_odd:   dd 1.0, 1.0, -1.0, 1.0, -1.0, -1.0, 1.0, -1.0
 
 s16_mult_even: dd 1.0, 1.0, M_SQRT1_2, M_SQRT1_2, 1.0, -1.0, M_SQRT1_2, -M_SQRT1_2
 s16_mult_odd1: dd COS16_1,  COS16_1,  COS16_3,  COS16_3,  COS16_1, -COS16_1,  COS16_3, -COS16_3
 s16_mult_odd2: dd COS16_3, -COS16_3,  COS16_1, -COS16_1, -COS16_3, -COS16_3, -COS16_1, -COS16_1
 s16_perm:      dd 0, 1, 2, 3, 1, 0, 3, 2
+s16_sign_early:   dd -1.0, 1.0, 1.0, -1.0, -1.0, 1.0, -1.0, 1.0
+s16_sign_combine: dd 1.0, -1.0, 1.0, -1.0, -1.0, 1.0, -1.0, 1.0
 
 s15_perm:      dd 0, 6, 5, 3, 2, 4, 7, 1
 
@@ -211,7 +214,8 @@ SECTION .text
 ; %2 - odd coefficients  (r1.reim, r3.reim, r5.reim, r7.reim)
 ; %3 - temporary
 ; %4 - temporary
-%macro FFT8_AVX 4
+; %5 - enable FMA sign folding (optional)
+%macro FFT8_AVX 4-5
     subps      %3, %1, %2               ;  r1234, r5678
     addps      %1, %1, %2               ;  q1234, q5678
 
@@ -239,8 +243,12 @@ SECTION .text
     vperm2f128 %2, %2, %2, 0x11         ;  t5678, t5678
     vperm2f128 %3, %3, %3, 0x00         ;  z2314, z2314
 
+%if cpuflag(fma3) && %0 > 4
+    fmaddps    %2, %2, [s8_sign_odd], %3 ;  u1234, u5678 odd
+%else
     xorps      %2, %2, [mask_ppmpmmpm]  ;  t * ppmpmmpm
     addps      %2, %3, %2               ;  u1234, u5678 odd
+%endif
 %endmacro
 
 ; Single 16-point in-place complex FFT
@@ -250,11 +258,18 @@ SECTION .text
 ; %4 - odd coefficients  (r9.reim, r11.reim, r13.reim, r15.reim)
 ; %5, %6 - temporary
 ; %7, %8 - temporary (optional)
-%macro FFT16 6-8
+; %9 - enable FMA sign folding for split-radix leaves (optional)
+%macro FFT16 6-9
     FFT4       %3, %4, %5
 %if %0 > 7
+%if %0 > 8
+    FFT8_AVX   %1, %2, %6, %7, 1
+%else
     FFT8_AVX   %1, %2, %6, %7
+%endif
+%if !(cpuflag(fma3) && %0 > 8)
     movaps     %8, [mask_mpmppmpm]
+%endif
     movaps     %7, [s16_perm]
 %define mask %8
 %define perm %7
@@ -274,18 +289,27 @@ SECTION .text
     shufps     %5, %5, %3, q2301            ; 0, 0, z8.imre...
 
     mulps      %4, %4, [s16_mult_odd1]      ; z.reim * costab
+%if cpuflag(fma3) && %0 > 8
+    fmaddps    %6, %6, [s16_mult_odd2], %4  ; s[8..15]
+    fmaddps    %5, %5, [s16_sign_early], %3 ; s[0...7]
+%else
     xorps      %5, %5, [mask_mppmmpmp]
 %if cpuflag(fma3)
     fmaddps    %6, %6, [s16_mult_odd2], %4  ; s[8..15]
-    addps      %5, %3, %5                   ; s[0...7]
 %else
     mulps      %6, %6, [s16_mult_odd2]      ; z.imre * costab
-
-    addps      %5, %3, %5                   ; s[0...7]
     addps      %6, %4, %6                   ; s[8..15]
+%endif
+    addps      %5, %3, %5                   ; s[0...7]
 %endif
     mulps      %5, %5, [s16_mult_even]      ; s[0...7]*costab
 
+%if cpuflag(fma3) && %0 > 8
+    vperm2f128 %4, %6, %6, 0x01             ; s[12..15, 8..11]
+    vperm2f128 %3, %5, %5, 0x01             ; s[4..7, 0..3]
+    fmaddps    %6, %4, [s16_sign_combine], %6
+    fmaddps    %5, %3, [s16_sign_combine], %5
+%else
     xorps      %4, %6, mask                 ; s[8..15]*mpmppmpm
     xorps      %3, %5, mask                 ; s[0...7]*mpmppmpm
 
@@ -294,6 +318,7 @@ SECTION .text
 
     addps      %6, %6, %4                   ; y56, u56, y34, u34
     addps      %5, %5, %3                   ; w56, x56, w34, x34
+%endif
 
     vpermilps  %6, %6, perm                 ; y56, u56, y43, u43
     vpermilps  %5, %5, perm                 ; w56, x56, w43, x43
@@ -1163,7 +1188,7 @@ ALIGN 16
     movaps m8,         [tab_32_float]
     vperm2f128 m9, m9, [tab_32_float + 32 - 4*7], 0x23
 
-    FFT16 m0, m1, m2, m3, m10, m11, m12, m13
+    FFT16 m0, m1, m2, m3, m10, m11, m12, m13, 1
 
     SPLIT_RADIX_COMBINE 1, m0, m1, m2, m3, m4, m5, m6, m7, m8, m9, \
                            m10, m11, m12, m13, m14, m15 ; temporary registers
@@ -1220,7 +1245,7 @@ ALIGN 16
     LOAD64_LUT tx1_o1, inq, lutq, (mmsize/2)*3, tmpq, tw_o, tmp2
 %endif
 
-    FFT16 tx1_e0, tx1_e1, tx1_o0, tx1_o1, tw_e, tw_o, tx2_o0, tx2_o1
+    FFT16 tx1_e0, tx1_e1, tx1_o0, tx1_o1, tw_e, tw_o, tx2_o0, tx2_o1, 1
 
 %if %2
     movaps tx2_e0, [inq + 4*mmsize]
@@ -1234,7 +1259,7 @@ ALIGN 16
     LOAD64_LUT tx2_o1, inq, lutq, (mmsize/2)*7, tmpq, tw_o, tmp2
 %endif
 
-    FFT16 tx2_e0, tx2_e1, tx2_o0, tx2_o1, tmp1, tmp2, tw_e, tw_o
+    FFT16 tx2_e0, tx2_e1, tx2_o0, tx2_o1, tmp1, tmp2, tw_e, tw_o, 1
 
     movaps tw_e,           [tab_64_float]
     vperm2f128 tw_o, tw_o, [tab_64_float + 64 - 4*7], 0x23

@@ -21,6 +21,7 @@ X[k] = sum_j x[j] exp(-2*pi*i*j*k/N).
 make
 make test
 make bench
+make ffmpeg-cycles
 ```
 
 The repository includes the pinned FFmpeg source. The build produces a local
@@ -110,20 +111,25 @@ Median execution times in microseconds:
 | N | radix-2 | tangent C | tangent-x86-asm | FFmpeg AVTX |
 |---:|---:|---:|---:|---:|
 | 16 | 0.110 | 0.090 | 0.050 | 0.050 |
-| 32 | 0.240 | 0.190 | 0.050 | 0.060 |
+| 32 | 0.230 | 0.180 | 0.050 | 0.060 |
 | 64 | 0.550 | 0.420 | 0.080 | 0.100 |
 | 128 | 1.250 | 0.840 | 0.200 | 0.170 |
-| 256 | 2.770 | 1.840 | 0.380 | 0.340 |
-| 512 | 6.140 | 3.830 | 0.720 | 0.690 |
-| 1024 | 13.290 | 8.270 | 1.480 | 1.470 |
-| 2048 | 28.700 | 17.590 | 3.090 | 3.250 |
-| 4096 | 61.800 | 37.960 | 7.040 | 7.600 |
-| 8192 | 136.611 | 85.710 | 18.500 | 21.310 |
+| 256 | 2.780 | 1.820 | 0.380 | 0.340 |
+| 512 | 6.100 | 3.830 | 0.720 | 0.690 |
+| 1024 | 13.280 | 8.290 | 1.490 | 1.470 |
+| 2048 | 28.660 | 17.610 | 3.090 | 3.230 |
+| 4096 | 61.631 | 37.990 | 6.990 | 7.550 |
+| 8192 | 136.390 | 85.870 | 18.460 | 21.380 |
 
 The assembly tangent path is faster than radix-2 at every listed size. Against
 FFmpeg it wins at 32, 64, and 2048–8192, ties at 16 within timer resolution,
 and is 1–18% behind at 128–1024. At the most important upper end, it is about
-13% faster than FFmpeg at 8192.
+14% faster than FFmpeg at 8192.
+
+The vendored FFmpeg FMA3 split-radix leaves are also patched with exact
+sign-folding reductions. A five-pair cycle A/B against the unmodified pinned
+source measured median gains of 0.17–0.96% from 64 through 8192 on this host.
+`make ffmpeg-cycles` runs the longer-batch FFmpeg-only cycle harness.
 
 The investigation of FFmpeg's x86 FFT optimization TODOs, including retained
 and rejected assembly experiments, is in

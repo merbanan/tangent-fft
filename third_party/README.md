@@ -17,6 +17,13 @@ x86 assembly, required headers/configuration metadata, licenses, and
 program, documentation, and test-suite includes that are absent from this
 snapshot.
 
+`ffmpeg/libavutil/x86/tx_float.asm` carries a local, benchmarked patch on top
+of that commit. It folds exact sign-XOR/add sequences into FMA3 operations only
+for the FFT16 leaves inside the 64-point-and-larger split-radix path. The
+standalone FFT8/FFT16/FFT32 arithmetic paths and the non-FMA path remain
+upstream. Details, correctness results, and the baseline comparison are in
+`../docs/ffmpeg-todo-investigation.md`.
+
 FFmpeg is primarily licensed under LGPL-2.1-or-later. The snapshot retains the
 upstream license notices alongside the included source, including
 `ffmpeg/COPYING.LGPLv2.1` and `ffmpeg/LICENSE.md`.

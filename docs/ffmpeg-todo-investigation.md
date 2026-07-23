@@ -5,8 +5,8 @@ Date: 2026-07-23
 ## Scope
 
 This report investigates the six TODO items at the top of FFmpeg's
-`libavutil/x86/tx_float.asm` and applies the useful ideas to
-`tangent-x86-asm`. The target machine was:
+`libavutil/x86/tx_float.asm` and applies the useful ideas both to FFmpeg
+itself and to `tangent-x86-asm`. The target machine was:
 
 - AMD Ryzen 9 3900X (Zen 2), AVX2 and FMA, no AVX-512;
 - GCC 15.2.0;
@@ -39,16 +39,77 @@ taskset -c 2 ./fft_harness --bench --min-power 4 --max-power 13 \
 
 | FFmpeg TODO | Finding | Decision |
 |---|---|---|
-| Carry registers from smaller transforms | Large win at 64 points | Implemented fixed FFT64 |
-| `vinsertf128` versus `vperm2f128` duplication | Better Zen 2 model, inconclusive whole-FFT timing | Kept upstream FFmpeg form |
-| Faster FFT8 | AVX2 gather version was substantially slower on Zen 2 | Rejected gather; retained scalar load/insert |
-| XORs versus blends/addsubs | One instruction removed from every final rotation; two more in high tangent products | Implemented |
+| Carry registers from smaller transforms | Large tangent FFT64 win; FFmpeg AVX2 path is register-saturated | Implemented in tangent; documented FFmpeg constraint |
+| `vinsertf128` versus `vperm2f128` duplication | Better Zen 2 model, but 0.2–0.5% slower in measured FFTs | Rejected; kept `vperm2f128` |
+| Faster FFT8 | Sign-folded FMA saves one instruction in larger transforms; AVX2 gather input was slow | Implemented selectively in FFmpeg; rejected gather |
+| XORs versus blends/addsubs | FMA sign folds improve FFmpeg 64–8192; addsub/FMA folds help tangent | Implemented in both |
 | Shuffles versus blends | Equivalent when lanes already align; most shuffles also permute | Retained existing blends only where valid |
 | AVX-512 split-radix | Promising design, but unavailable on this host | Design recorded; no untestable kernel added |
 
 The retained changes preserve the previous worst relative error for
 `tangent-x86-asm`, `1.413e-07`, and pass direct-DFT validation through 512 plus
-cross-checks through `2^22`.
+cross-checks through `2^22`. Patched FFmpeg retains its previous
+`1.371e-07` worst relative error in the same test.
+
+## Direct FFmpeg patch and A/B result
+
+The retained FFmpeg change is confined to the FMA3 split-radix leaves used
+from 64 points upward. Standalone FFT8, FFT16, and FFT32 entry points remain
+byte-for-byte on the upstream arithmetic path.
+
+Within each selected FFT16 leaf, three sign-XOR/add sequences become
+sign-folded FMAs:
+
+```asm
+; FFT8 tail: two instructions become one
+xorps      t, t, [sign_mask]
+addps      t, z, t
+; becomes
+fmaddps    t, t, [sign_values], z
+
+; FFT16 half exchange: each three-instruction sequence becomes two
+xorps      tmp, value, sign_mask
+vperm2f128 tmp, tmp, tmp, 0x01
+addps      value, value, tmp
+; becomes
+vperm2f128 tmp, value, value, 0x01
+fmaddps    value, tmp, [sign_values], value
+```
+
+The early FFT16 sign adjustment is folded the same way. The two late
+adjustments save two instructions, the early adjustment and FFT8 tail save
+one each, and the now-unused sign-mask load is removed: five dynamic
+instructions per selected FFT16 leaf. The normal and pre-shuffled FMA3
+split-radix entry points each shrink by 48 bytes; the linked test executable's
+text shrinks by 96 bytes overall.
+
+The direct cycle harness can be run with:
+
+```sh
+make ffmpeg-cycles
+./analysis/ffmpeg_cycles 8
+```
+
+It uses invariant-TSC batches, 31 samples, a long per-size warm-up, and includes
+the adapter's input/output copies. For the A/B test, an executable linked
+against unmodified commit `fd06983` was preserved before rebuilding the
+patched source. Five pairs were run per size on CPU 2 with the order reversed
+on alternating pairs. The table reports the median paired change, so isolated
+frequency-transition outliers do not dominate:
+
+| N | Patched FFmpeg versus baseline |
+|---:|---:|
+| 64 | 0.51% faster |
+| 128 | 0.88% faster |
+| 256 | 0.96% faster |
+| 512 | 0.81% faster |
+| 1024 | 0.17% faster |
+| 2048 | 0.47% faster |
+| 4096 | 0.43% faster |
+| 8192 | 0.34% faster |
+
+These are small, host-specific gains, but every median is in the desired
+direction and the patch has a direct instruction-count advantage.
 
 ## 1. Carry registers from smaller transforms
 
@@ -84,6 +145,24 @@ child can occupy eight YMM registers, leaving too few registers for four input
 streams, factors, and combine temporaries. A larger fixed kernel therefore
 needs a new lifetime schedule, not just more unrolling.
 
+### Direct FFmpeg attempt
+
+FFmpeg's `.32pt` stage keeps `m0`, `m2`, `m4`, and `m6` live, but stores
+`m1`, `m3`, `m5`, and `m7`. `SPLIT_RADIX_COMBINE_64` later reloads exactly
+those four registers. Removing that traffic looks straightforward until the
+two FFT16 children are included:
+
+- the FFT32 result needs eight YMM registers;
+- the first FFT16 child needs four;
+- the second FFT16 child needs four;
+- twiddles and the combine still need temporaries.
+
+That already consumes all 16 architectural YMM registers before the twiddle
+and combine state is counted. Schedules that kept the four stored values had
+to spill an equivalent four child or temporary values, merely moving the same
+traffic. The AVX2 FFmpeg path was therefore left unchanged here. This remains
+a strong AVX-512 candidate because x86-64 then has 32 vector registers.
+
 ## 2. `vinsertf128` versus `vperm2f128` duplication
 
 The viable one-instruction substitution in FFmpeg's `FFT8_AVX` is:
@@ -105,13 +184,14 @@ Both duplicate the low 128-bit half. LLVM MCA's Zen 2 model reports:
 | `vperm2f128` | 1 | 3 cycles | 1.00 cycle |
 | `vinsertf128` | 1 | 2 cycles | 0.33 cycle |
 
-Three alternating whole-transform A/B passes produced no consistent timing
-difference through 8192; changes at larger sizes moved in both directions and
-stayed within normal run-to-run noise. The high-half duplicate cannot use the
-same trick: it would need an extraction followed by insertion and would add an
-instruction.
+An insertion-only build was measured with the same long-batch harness as the
+final patch. From 128 through 2048 it was consistently about 0.2–0.5% slower,
+4096 was effectively tied, and 8192 produced no repeatable gain. The high-half
+duplicate cannot use the same trick: it would need an extraction followed by
+insertion and would add an instruction.
 
-The vendored FFmpeg source therefore retains its original `vperm2f128`.
+The measured result overrides the more optimistic static model. The vendored
+FFmpeg source therefore retains its original `vperm2f128`.
 `tangent-x86-asm` already uses `vinsertf128` where it naturally builds a YMM
 register from two XMM results.
 
@@ -120,6 +200,12 @@ register from two XMM results.
 FFmpeg's AVX FFT8 arithmetic is already a 20-instruction kernel. The remaining
 opportunities are mostly critical-path and input-layout changes rather than
 obvious instruction deletion.
+
+In the FMA3 split-radix leaf, the final XOR/add pair can be expressed as a
+single FMA using a vector of exact `+1.0f` and `-1.0f` values. That selected
+expansion is now 19 instructions. The ordinary FFT8 function remains on
+FFmpeg's original 20-instruction sequence because applying all leaf changes to
+the standalone small-size functions slightly regressed FFT16 timing.
 
 One input-side variant was tested: gather four permuted complex values with
 `vgatherdpd`, then extract the two XMM halves. For an eight-point leaf this
@@ -157,6 +243,20 @@ count. It should not replace the present kernel without per-microarchitecture
 dispatch and measurements.
 
 ## 4. Replace XORs with blends and addsubs
+
+### FFmpeg FMA sign folds
+
+The directly patched FFmpeg path replaces exact sign-XOR/add operations with
+FMA against `+1.0f`/`-1.0f` constants. This is numerically safe: multiplying a
+finite binary32 value by either exact unit value only changes its sign before
+the existing addition. The full correctness suite confirms unchanged reported
+error.
+
+Applying the folds to every FMA3 FFT16 made the standalone 16-point case
+slightly slower. The macro therefore takes an optional flag, enabled only by
+the bottom split-radix stages used for sizes 64 and above. This preserves
+FFmpeg's original 8/16/32 code paths while delivering the paired cycle results
+reported above.
 
 ### Final split-radix rotation
 
@@ -259,9 +359,9 @@ Median microseconds after the retained changes:
 | 128 | 0.200 | 0.170 | 17.6% slower |
 | 256 | 0.380 | 0.340 | 11.8% slower |
 | 512 | 0.720 | 0.690 | 4.3% slower |
-| 1024 | 1.480 | 1.470 | 0.7% slower |
-| 2048 | 3.090 | 3.250 | 4.9% faster |
-| 4096 | 7.040 | 7.600 | 7.4% faster |
-| 8192 | 18.500 | 21.310 | 13.2% faster |
+| 1024 | 1.490 | 1.470 | 1.4% slower |
+| 2048 | 3.090 | 3.230 | 4.3% faster |
+| 4096 | 6.990 | 7.550 | 7.4% faster |
+| 8192 | 18.460 | 21.380 | 13.7% faster |
 
 The complete machine-readable run is in `benchmark.csv`.

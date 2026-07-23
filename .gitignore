@@ -1,4 +1,5 @@
 *.o
 fft_harness
+analysis/ffmpeg_cycles
 .ffmpeg-build/
 .ffmpeg-tools/

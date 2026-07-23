@@ -17,9 +17,9 @@ else
 CPPFLAGS += -DHAVE_TANGENT_X86_ASM=0
 endif
 
-CPPFLAGS += -Ithird_party/ffmpeg -I.ffmpeg-build
+CPPFLAGS += -I. -Ithird_party/ffmpeg -I.ffmpeg-build
 
-.PHONY: all clean test bench debug ffmpeg
+.PHONY: all clean test bench debug ffmpeg ffmpeg-cycles
 
 all: $(TARGET)
 
@@ -33,7 +33,8 @@ harness.o: harness.c fft.h
 tangent_x86_kernel.o: tangent_x86_kernel.asm
 	$(NASM) -f elf64 -g -F dwarf -o $@ $<
 
-$(FFMPEG_LIB): scripts/build_ffmpeg.sh
+$(FFMPEG_LIB): scripts/build_ffmpeg.sh \
+	third_party/ffmpeg/libavutil/x86/tx_float.asm
 	NASM="$(NASM)" ./scripts/build_ffmpeg.sh
 
 ffmpeg: $(FFMPEG_LIB)
@@ -44,10 +45,17 @@ test: $(TARGET)
 bench: $(TARGET)
 	./$(TARGET) --bench
 
+ffmpeg-cycles: analysis/ffmpeg_cycles
+	taskset -c 2 ./analysis/ffmpeg_cycles
+
+analysis/ffmpeg_cycles: analysis/ffmpeg_cycles.c ffmpeg_fft.o $(FFMPEG_LIB)
+	$(CC) $(CFLAGS) $(CPPFLAGS) $(LDFLAGS) -o $@ $< ffmpeg_fft.o \
+		$(FFMPEG_LIB) $(LDLIBS)
+
 debug: CFLAGS := -O0 -g3 -std=c11 -Wall -Wextra -Wpedantic \
 	-fsanitize=address,undefined
 debug: LDFLAGS := -fsanitize=address,undefined
 debug: clean $(TARGET)
 
 clean:
-	$(RM) $(TARGET) $(OBJECTS)
+	$(RM) $(TARGET) $(OBJECTS) analysis/ffmpeg_cycles
