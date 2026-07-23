@@ -1,12 +1,16 @@
 # Tangent FFT comparison
 
-This repository contains six single-precision, forward, complex FFT paths:
+This repository contains sixteen single-precision, forward, complex FFT
+benchmark entries:
 
 - iterative radix-2 Cooley–Tukey in C;
 - recursive conjugate-pair split-radix in C;
 - a planned, non-recursive tangent FFT in C;
 - `tangent-x86-asm`, an AVX2/FMA tangent FFT for x86-64;
-- `lane4-radix4`, an AVX2/FMA lane-factorized radix-4 FFT;
+- `lane4-c`, a plain-C lane-factorized FFT compiled with automatic
+  vectorization disabled;
+- lane4 kernels for SSE, SSE2, SSE3, SSSE3, SSE4.1, SSE4.2, AVX,
+  AVX+FMA, AVX2, and AVX2+FMA;
 - FFmpeg `libavutil` AVTX, built locally from pinned source.
 
 Every algorithm uses `float` samples, coefficients, twiddles, and scale
@@ -47,12 +51,19 @@ timings. The FFmpeg row includes the copies into and out of its aligned AVTX
 buffers, matching this project's in-place public API. The harness prints all
 results to the console and can also write CSV.
 
-`tangent-x86-asm` is enabled when the host is x86-64 with AVX2 and FMA.
-Portable C algorithms remain available on other targets.
+Each x86 lane4 entry is runtime-gated by CPUID. `tangent-x86-asm` is enabled
+when the host is x86-64 with AVX2 and FMA. Portable C algorithms remain
+available on other targets.
 
-## Lane-factorized AVX2 implementation
+## Lane-factorized implementations
 
-For `N=4M`, `lane4-radix4` treats each YMM register as four complex lanes and
+For `N=4M`, every lane4 implementation computes the four length-`M`
+transforms from `x[4m+r]` in parallel. The plain-C implementation makes the
+decomposition explicit. The SSE family uses separate four-float real and
+imaginary vectors. The 256-bit family treats each YMM register as four
+interleaved complex lanes.
+
+The tuned `lane4-avx2-fma` kernel
 computes the four length-`M` transforms from `x[4m+r]` simultaneously. Its
 mixed-radix input permutation is fused into FFT4/FFT8 leaves, upper stages are
 block-major radix-4, and the final twiddles feed a fused 4x4 transpose plus
@@ -65,6 +76,8 @@ minimum scalar operation count. On this host it beats tangent assembly and
 FFmpeg at every tested power of two from 16 through 8192. The derivation,
 prototype history, cycle results, limitations, and research references are in
 [`docs/lane-factorized-fft.md`](docs/lane-factorized-fft.md).
+The per-ISA organization, compiler boundaries, and comparative measurements
+are in [`docs/lane4-isa-variants.md`](docs/lane4-isa-variants.md).
 
 ## Tangent implementation structure
 
@@ -126,7 +139,7 @@ The checked-in `benchmark.csv` comes from:
 
 Median execution times in microseconds:
 
-| N | radix-2 | tangent C | tangent-x86-asm | lane4-radix4 | FFmpeg AVTX |
+| N | radix-2 | tangent C | tangent-x86-asm | lane4-avx2-fma | FFmpeg AVTX |
 |---:|---:|---:|---:|---:|---:|
 | 16 | 0.110 | 0.090 | 0.050 | 0.030 | 0.050 |
 | 32 | 0.230 | 0.190 | 0.050 | 0.040 | 0.060 |

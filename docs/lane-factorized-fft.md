@@ -2,7 +2,8 @@
 
 ## Outcome
 
-The resulting algorithm is `lane4-radix4`, a float-only, forward complex FFT
+The resulting optimized algorithm is `lane4-avx2-fma` (formerly reported as
+`lane4-radix4`), a float-only, forward complex FFT
 for power-of-two sizes. On the test host it is faster than this repository's
 split-radix C, tangent C, tangent AVX2 assembly, and patched FFmpeg AVTX paths
 at every measured size from 16 through 8192. It remains faster through its
@@ -188,7 +189,7 @@ The harness pins execution to CPU 2, warms each routine, measures 31
 serialized-TSC batches, and reports the median cycles per transform. These
 results were measured on an AMD Ryzen 9 3900X with GCC 15.2.0:
 
-| N | lane4-radix4 | tangent-x86-asm | FFmpeg AVTX | vs tangent | vs FFmpeg |
+| N | lane4-avx2-fma | tangent-x86-asm | FFmpeg AVTX | vs tangent | vs FFmpeg |
 |---:|---:|---:|---:|---:|---:|
 | 16 | 63.5 | 135.9 | 125.2 | 2.14x | 1.97x |
 | 32 | 88.3 | 143.7 | 161.7 | 1.63x | 1.83x |
@@ -216,7 +217,7 @@ cross-checks through `2^22`. The production lane path is currently enabled
 through 131072 and therefore participates in those cross-checks up to that
 size.
 
-The worst relative maximum error observed for `lane4-radix4` is
+The worst relative maximum error observed for `lane4-avx2-fma` is
 `3.238e-07`. Transform samples, roots, finish factors, and all arithmetic in
 the algorithm are `float`; wider types are used only by the test reference
 and timers.
@@ -247,10 +248,12 @@ or about `23N` bytes plus allocator and plan overhead. Plan construction is
 outside benchmark timing. Execution is in-place at the API boundary but uses
 the `8N`-byte work array.
 
-The implementation requires x86-64 AVX2 and FMA and is currently exposed for
-`16 <= N <= 131072`. Portable algorithms remain available elsewhere. It
-supports only power-of-two complex forward transforms and natural-order
-output. There is no inverse or real-input specialization yet.
+This optimized implementation requires x86-64 AVX2 and FMA and is currently
+exposed for `16 <= N <= 131072`. The same decomposition also has plain-C and
+runtime-gated SSE-through-AVX2 implementations, described in
+`lane4-isa-variants.md`. It supports only power-of-two complex forward
+transforms and natural-order output. There is no inverse or real-input
+specialization yet.
 
 At substantially larger sizes, cache blocking or a recursive six-step
 version of the inner vector transform may reduce work-array traffic. On

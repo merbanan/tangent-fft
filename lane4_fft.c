@@ -1,3 +1,25 @@
+#if defined(LANE4_BUILD_AVX)
+#define lane4_fft_plan lane4_avx_fft_plan
+#define lane4_fft_plan_create lane4_avx_fft_plan_create
+#define lane4_fft_plan_destroy lane4_avx_fft_plan_destroy
+#define lane4_fft_execute lane4_avx_fft_execute
+#define LANE4_USE_FMA 0
+#elif defined(LANE4_BUILD_AVX_FMA)
+#define lane4_fft_plan lane4_avx_fma_fft_plan
+#define lane4_fft_plan_create lane4_avx_fma_fft_plan_create
+#define lane4_fft_plan_destroy lane4_avx_fma_fft_plan_destroy
+#define lane4_fft_execute lane4_avx_fma_fft_execute
+#define LANE4_USE_FMA 1
+#elif defined(LANE4_BUILD_AVX2)
+#define lane4_fft_plan lane4_avx2_fft_plan
+#define lane4_fft_plan_create lane4_avx2_fft_plan_create
+#define lane4_fft_plan_destroy lane4_avx2_fft_plan_destroy
+#define lane4_fft_execute lane4_avx2_fft_execute
+#define LANE4_USE_FMA 0
+#else
+#define LANE4_USE_FMA 1
+#endif
+
 #include "lane4_fft.h"
 
 #include <immintrin.h>
@@ -190,8 +212,14 @@ static inline __m256 multiply_common(__m256 value, float re, float im)
     const __m256 real = _mm256_set1_ps(re);
     const __m256 imag = _mm256_set1_ps(im);
     const __m256 swapped = _mm256_permute_ps(value, 0xb1);
+#if LANE4_USE_FMA
     return _mm256_fmaddsub_ps(
         value, real, _mm256_mul_ps(swapped, imag));
+#else
+    return _mm256_addsub_ps(
+        _mm256_mul_ps(value, real),
+        _mm256_mul_ps(swapped, imag));
+#endif
 }
 
 static inline __m256 multiply_lanes_split(__m256 value,
@@ -199,8 +227,14 @@ static inline __m256 multiply_lanes_split(__m256 value,
                                           __m256 imag)
 {
     const __m256 swapped = _mm256_permute_ps(value, 0xb1);
+#if LANE4_USE_FMA
     return _mm256_fmaddsub_ps(
         value, real, _mm256_mul_ps(swapped, imag));
+#else
+    return _mm256_addsub_ps(
+        _mm256_mul_ps(value, real),
+        _mm256_mul_ps(swapped, imag));
+#endif
 }
 
 static inline __m256 multiply_minus_i(__m256 value)
