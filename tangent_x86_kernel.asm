@@ -23,6 +23,11 @@ base_s4_scale: dd 1.0, 1.0, 1.4142135623730951, 1.4142135623730951
 
 section .text
 
+global tangent_x86_zeroupper
+tangent_x86_zeroupper:
+    vzeroupper
+    ret
+
 ; rdi=input, rsi=output, rdx=uint32 permutation, rcx=count
 ; Gather four complete complex-float values as four 64-bit lanes.
 global tangent_x86_permute
@@ -194,7 +199,6 @@ global %1
     cmp         rax, rcx
     jb          %%loop
 %%done:
-    vzeroupper
     ret
 %endmacro
 
@@ -736,7 +740,7 @@ S4_KERNEL tangent_x86_s4_high, 1
     vmovups     [r8 + 16], xmm1
 %endmacro
 
-%macro REG_LEAF3_CORE 1
+%macro REG_LEAF3_CALC 1
 %if %1 = KIND_S || %1 = KIND_S4
     REG_BASE xmm0, KIND_S4
 %else
@@ -754,6 +758,10 @@ S4_KERNEL tangent_x86_s4_high, 1
     REG_Q1 xmm0, xmm1, KIND_S2
 %endif
     REG_Q2 %1
+%endmacro
+
+%macro REG_LEAF3_CORE 1
+    REG_LEAF3_CALC %1
     vmovups     [r8], xmm0
     vmovups     [r8 + 16], xmm1
     vmovups     [r8 + 32], xmm2
@@ -926,6 +934,34 @@ MAKE_LEAF_BATCH tangent_x86_batch_leaf4, REG_LEAF4_BODY, 4
     REG_LEAF4_CORE %1
 %endmacro
 
+%macro COPY_BACK_YMM 1
+%assign %%offset 0
+%rep %1
+    vmovups     ymm0, [rsi + %%offset]
+    vmovups     [rdi + %%offset], ymm0
+%assign %%offset %%offset + 32
+%endrep
+%endmacro
+
+; All sixteen inputs are gathered before the first output store, so this
+; fixed transform is safe with input == output and needs no scratch copy.
+global tangent_x86_gather_fft16_normal
+align 64
+tangent_x86_gather_fft16_normal:
+    mov         r10, rdx
+    mov         r8, rsi
+    GATHER_PAIR xmm0, 0
+    GATHER_PAIR xmm1, 2
+    GATHER_PAIR xmm2, 4
+    GATHER_PAIR xmm3, 6
+    GATHER_PAIR xmm4, 8
+    GATHER_PAIR xmm5, 10
+    GATHER_PAIR xmm6, 12
+    GATHER_PAIR xmm7, 14
+    REG_LEAF4_CORE KIND_NORMAL
+    vzeroupper
+    ret
+
 ; Fixed 32-point top-level kernel.  Keep the complete 16-point even child in
 ; registers, retain only the two 8-point children in scratch, and combine
 ; directly. This mirrors FFmpeg's FFT32 register lifetime without importing
@@ -944,6 +980,7 @@ MAKE_LEAF_BATCH tangent_x86_batch_leaf4, REG_LEAF4_BODY, 4
 
 ; input, output, permutation, fixed-leaf tables, level-5 scaled factor.
 global tangent_x86_gather_fft32_normal
+align 64
 tangent_x86_gather_fft32_normal:
     mov         r9, r8
 
@@ -982,6 +1019,7 @@ tangent_x86_gather_fft32_normal:
 
     FFT32_NORMAL_CHUNK ymm0, ymm2, ymm4, ymm6, 0, 0, 8*8, 16*8
     FFT32_NORMAL_CHUNK ymm1, ymm3, ymm5, ymm7, 32, 4*8, 12*8, 20*8
+    COPY_BACK_YMM 8
     vzeroupper
     ret
 
@@ -1007,6 +1045,7 @@ tangent_x86_gather_fft32_normal:
 ; level-6 factor. The last 16-point child remains in ymm0..ymm3 through the
 ; top-level combine, saving four stores and four reloads.
 global tangent_x86_gather_fft64_normal
+align 64
 tangent_x86_gather_fft64_normal:
     mov         rax, r8                    ; level-5 factor
 
@@ -1091,7 +1130,225 @@ tangent_x86_gather_fft64_normal:
     FFT64_NORMAL_CHUNK ymm1, 32
     FFT64_NORMAL_CHUNK ymm2, 64
     FFT64_NORMAL_CHUNK ymm3, 96
+    COPY_BACK_YMM 16
     vzeroupper
+    ret
+
+; Gather one complete fixed leaf at a compile-time output/permutation offset.
+; The FFT128 entry below emits its complete transform tree in execution order,
+; avoiding homogeneous-batch offset loads, loop branches, and C dispatch.
+%macro FIXED_GATHER_LEAF 3
+    lea         r10, [rdx + (%1)*4]
+    lea         r8, [rsi + (%1)*8]
+    GATHER_PAIR xmm0, 0
+    GATHER_PAIR xmm1, 2
+    GATHER_PAIR xmm2, 4
+    GATHER_PAIR xmm3, 6
+%if %2 = 3
+    REG_LEAF3_CORE %3
+%else
+    GATHER_PAIR xmm4, 8
+    GATHER_PAIR xmm5, 10
+    GATHER_PAIR xmm6, 12
+    GATHER_PAIR xmm7, 14
+    REG_LEAF4_CORE %3
+%endif
+%endmacro
+
+; One four-complex chunk of a fixed normal/S combine. Tangent factors are
+; stored as ordinary complex factors, so both transform kinds use this same
+; branch-free expansion.
+%macro FIXED_UNSCALED_CHUNK 4
+    vmovups     ymm0, [rsi + %1 + %3]
+    vmovups     ymm1, [rsi + %1 + %2 + %3]
+    vmovups     ymm2, [rsi + %1 + 2*(%2) + %3]
+    vmovups     ymm3, [rsi + %1 + 3*(%2) + %3]
+    vmovups     ymm12, [%4 + %3]
+    vmovsldup   ymm13, ymm12
+    vmovshdup   ymm12, ymm12
+    APPLY_FACTOR ymm2, ymm3, ymm13, ymm12, ymm6, ymm7
+    FINISH_UNSCALED ymm0, ymm1, ymm2, ymm3, ymm4, ymm5, ymm6, ymm7
+    vmovups     [rsi + %1 + %3], ymm2
+    vmovups     [rsi + %1 + %2 + %3], ymm4
+    vmovups     [rsi + %1 + 2*(%2) + %3], ymm3
+    vmovups     [rsi + %1 + 3*(%2) + %3], ymm5
+%endmacro
+
+%macro FIXED_UNSCALED_NODE 4
+%assign %%chunk 0
+%rep %3
+    FIXED_UNSCALED_CHUNK %1, %2, %%chunk, %4
+%assign %%chunk %%chunk + 32
+%endrep
+%endmacro
+
+; The first four factors of an S node are wholly in the 1+i*tan region.
+; Use the reduced tangent products instead of treating those factors as
+; general complex numbers. The boundary-containing vector remains on the
+; general expansion below.
+%macro FIXED_TANGENT_LOW_CHUNK 3
+    vmovups     ymm0, [rsi + %1]
+    vmovups     ymm1, [rsi + %1 + %2]
+    vmovups     ymm2, [rsi + %1 + 2*(%2)]
+    vmovups     ymm3, [rsi + %1 + 3*(%2)]
+    vmovups     ymm12, [%3]
+    vmovshdup   ymm13, ymm12
+    vpermilps   ymm6, ymm2, 0xb1
+    vpermilps   ymm7, ymm3, 0xb1
+    vxorps      ymm6, ymm6, [sign_even]
+    vxorps      ymm7, ymm7, [sign_odd]
+    vfmadd231ps ymm2, ymm6, ymm13
+    vfmadd231ps ymm3, ymm7, ymm13
+    FINISH_UNSCALED ymm0, ymm1, ymm2, ymm3, ymm4, ymm5, ymm6, ymm7
+    vmovups     [rsi + %1], ymm2
+    vmovups     [rsi + %1 + %2], ymm4
+    vmovups     [rsi + %1 + 2*(%2)], ymm3
+    vmovups     [rsi + %1 + 3*(%2)], ymm5
+%endmacro
+
+; input, output, permutation, fixed-leaf tables, level-5 scaled factor,
+; level-5 tangent factor, level-6 scaled factor, level-7 scaled factor.
+global tangent_x86_gather_fft128_normal
+align 64
+tangent_x86_gather_fft128_normal:
+    push        rbx
+    push        r12
+    push        r13
+    push        r14
+    mov         rbx, r8
+    mov         r12, r9
+    mov         r13, [rsp + 40]
+    mov         r14, [rsp + 48]
+
+    FIXED_GATHER_LEAF 0,   4, KIND_NORMAL
+    FIXED_GATHER_LEAF 16,  3, KIND_S
+    FIXED_GATHER_LEAF 24,  3, KIND_S
+    FIXED_GATHER_LEAF 32,  4, KIND_S
+    FIXED_GATHER_LEAF 48,  4, KIND_S
+    FIXED_GATHER_LEAF 64,  4, KIND_S2
+    FIXED_GATHER_LEAF 80,  3, KIND_S
+    FIXED_GATHER_LEAF 88,  3, KIND_S
+    FIXED_GATHER_LEAF 96,  4, KIND_S2
+    FIXED_GATHER_LEAF 112, 3, KIND_S
+    FIXED_GATHER_LEAF 120, 3, KIND_S
+
+    ; Three 32-point nodes.
+    FIXED_UNSCALED_NODE 0,   64, 2, rbx
+    FIXED_TANGENT_LOW_CHUNK 512, 64, r12
+    FIXED_UNSCALED_CHUNK 512, 64, 32, r12
+    FIXED_TANGENT_LOW_CHUNK 768, 64, r12
+    FIXED_UNSCALED_CHUNK 768, 64, 32, r12
+    ; The 64- and 128-point normal parents.
+    FIXED_UNSCALED_NODE 0, 128, 4, r13
+    FIXED_UNSCALED_NODE 0, 256, 8, r14
+
+    vzeroupper
+    pop         r14
+    pop         r13
+    pop         r12
+    pop         rbx
+    ret
+
+%macro FIXED_S2_CHUNK 6
+    vmovups     ymm0, [rsi + %1 + %3]
+    vmovups     ymm1, [rsi + %1 + %2 + %3]
+    vmovups     ymm2, [rsi + %1 + 2*(%2) + %3]
+    vmovups     ymm3, [rsi + %1 + 3*(%2) + %3]
+    vmovups     ymm12, [%4 + %3]
+    vmovsldup   ymm13, ymm12
+    vmovshdup   ymm12, ymm12
+    APPLY_FACTOR ymm2, ymm3, ymm13, ymm12, ymm6, ymm7
+    vaddps      ymm4, ymm2, ymm3
+    vsubps      ymm5, ymm2, ymm3
+    vmulps      ymm4, ymm4, [%5 + %3]
+    vmulps      ymm5, ymm5, [%6 + %3]
+    vaddps      ymm2, ymm0, ymm4
+    vsubps      ymm3, ymm0, ymm4
+    vpermilps   ymm5, ymm5, 0xb1
+    vxorps      ymm6, ymm5, [sign_all]
+    vaddsubps   ymm4, ymm1, ymm6
+    vaddsubps   ymm5, ymm1, ymm5
+    vmovups     [rsi + %1 + %3], ymm2
+    vmovups     [rsi + %1 + %2 + %3], ymm4
+    vmovups     [rsi + %1 + 2*(%2) + %3], ymm3
+    vmovups     [rsi + %1 + 3*(%2) + %3], ymm5
+%endmacro
+
+; A fixed 256-point tree. This tests whether eliminating the remaining
+; level/kind dispatch and offset loops pays off beyond FFT128.
+global tangent_x86_gather_fft256_normal
+align 64
+tangent_x86_gather_fft256_normal:
+    push        rbx
+    push        r12
+    push        r13
+    push        r14
+    push        r15
+    mov         rbx, r8
+    mov         r12, r9
+
+    ; The normal 128-point child.
+    FIXED_GATHER_LEAF 0,   4, KIND_NORMAL
+    FIXED_GATHER_LEAF 16,  3, KIND_S
+    FIXED_GATHER_LEAF 24,  3, KIND_S
+    FIXED_GATHER_LEAF 32,  4, KIND_S
+    FIXED_GATHER_LEAF 48,  4, KIND_S
+    FIXED_GATHER_LEAF 64,  4, KIND_S2
+    FIXED_GATHER_LEAF 80,  3, KIND_S
+    FIXED_GATHER_LEAF 88,  3, KIND_S
+    FIXED_GATHER_LEAF 96,  4, KIND_S2
+    FIXED_GATHER_LEAF 112, 3, KIND_S
+    FIXED_GATHER_LEAF 120, 3, KIND_S
+    ; Two 64-point S children.
+    FIXED_GATHER_LEAF 128, 4, KIND_S4
+    FIXED_GATHER_LEAF 144, 3, KIND_S
+    FIXED_GATHER_LEAF 152, 3, KIND_S
+    FIXED_GATHER_LEAF 160, 4, KIND_S
+    FIXED_GATHER_LEAF 176, 4, KIND_S
+    FIXED_GATHER_LEAF 192, 4, KIND_S4
+    FIXED_GATHER_LEAF 208, 3, KIND_S
+    FIXED_GATHER_LEAF 216, 3, KIND_S
+    FIXED_GATHER_LEAF 224, 4, KIND_S
+    FIXED_GATHER_LEAF 240, 4, KIND_S
+
+    ; Level 5.
+    FIXED_UNSCALED_NODE 0, 64, 2, rbx
+    FIXED_TANGENT_LOW_CHUNK 512, 64, r12
+    FIXED_UNSCALED_CHUNK 512, 64, 32, r12
+    FIXED_TANGENT_LOW_CHUNK 768, 64, r12
+    FIXED_UNSCALED_CHUNK 768, 64, 32, r12
+    mov         r13, [rsp + 48]
+    mov         r14, [rsp + 56]
+    FIXED_S2_CHUNK 1024, 64, 0,  r12, r13, r14
+    FIXED_S2_CHUNK 1024, 64, 32, r12, r13, r14
+    FIXED_S2_CHUNK 1536, 64, 0,  r12, r13, r14
+    FIXED_S2_CHUNK 1536, 64, 32, r12, r13, r14
+
+    ; Level 6.
+    mov         r13, [rsp + 64]
+    FIXED_UNSCALED_NODE 0, 128, 4, r13
+    mov         r14, [rsp + 72]
+    FIXED_TANGENT_LOW_CHUNK 1024, 128, r14
+    FIXED_UNSCALED_CHUNK 1024, 128, 32, r14
+    FIXED_UNSCALED_CHUNK 1024, 128, 64, r14
+    FIXED_UNSCALED_CHUNK 1024, 128, 96, r14
+    FIXED_TANGENT_LOW_CHUNK 1536, 128, r14
+    FIXED_UNSCALED_CHUNK 1536, 128, 32, r14
+    FIXED_UNSCALED_CHUNK 1536, 128, 64, r14
+    FIXED_UNSCALED_CHUNK 1536, 128, 96, r14
+
+    ; Level 7 and the level-8 root.
+    mov         r13, [rsp + 80]
+    FIXED_UNSCALED_NODE 0, 256, 8, r13
+    mov         r13, [rsp + 88]
+    FIXED_UNSCALED_NODE 0, 512, 16, r13
+
+    vzeroupper
+    pop         r15
+    pop         r14
+    pop         r13
+    pop         r12
+    pop         rbx
     ret
 
 ; input, output, permutation, offsets, count, tables, kind=[stack].
@@ -1100,6 +1357,7 @@ global %1 %+ _n
 global %1 %+ _s
 global %1 %+ _s2
 global %1 %+ _s4
+align 64
 %1 %+ _n:
     mov         r11d, KIND_NORMAL
     jmp         %%entry
@@ -1166,7 +1424,6 @@ global %1 %+ _s4
     inc         rax
     jmp         %%loop_s4
 %%done:
-    vzeroupper
     pop         rbx
     ret
 %endmacro
@@ -1569,6 +1826,7 @@ tangent_x86_batch_s4_q4:
 ; Batched arbitrary-size unscaled nodes.
 ; data, offsets, node_count, quarter, factor
 global tangent_x86_batch_unscaled_qn
+align 64
 tangent_x86_batch_unscaled_qn:
     push        r12
     push        r13
@@ -1605,7 +1863,52 @@ tangent_x86_batch_unscaled_qn:
     inc         rax
     jmp         .batch_un_loop_node
 .batch_un_done:
-    vzeroupper
+    pop         r13
+    pop         r12
+    ret
+
+; Variant with execution-ordered, preduplicated real/imaginary factors.
+; It trades one extra load for the two lane-duplication shuffles.
+global tangent_x86_batch_unscaled_qn_split
+align 64
+tangent_x86_batch_unscaled_qn_split:
+    push        r12
+    push        r13
+    push        r14
+    mov         r12, rdx
+    shl         rcx, 3
+    mov         r13, rcx
+    mov         r14, r9
+    xor         rax, rax
+.batch_uns_loop_node:
+    cmp         rax, r12
+    jae         .batch_uns_done
+    mov         r10d, [rsi + rax*4]
+    lea         r10, [rdi + r10*8]
+    lea         r11, [r10 + r13]
+    lea         rdx, [r11 + r13]
+    lea         rcx, [rdx + r13]
+    xor         r9, r9
+.batch_uns_loop_k:
+    vmovups     ymm0, [r10 + r9]
+    vmovups     ymm1, [r11 + r9]
+    vmovups     ymm2, [rdx + r9]
+    vmovups     ymm3, [rcx + r9]
+    vmovups     ymm13, [r8 + r9]
+    vmovups     ymm12, [r14 + r9]
+    APPLY_FACTOR ymm2, ymm3, ymm13, ymm12, ymm6, ymm7
+    FINISH_UNSCALED ymm0, ymm1, ymm2, ymm3, ymm4, ymm5, ymm6, ymm7
+    vmovups     [r10 + r9], ymm2
+    vmovups     [r11 + r9], ymm4
+    vmovups     [rdx + r9], ymm3
+    vmovups     [rcx + r9], ymm5
+    add         r9, 32
+    cmp         r9, r13
+    jb          .batch_uns_loop_k
+    inc         rax
+    jmp         .batch_uns_loop_node
+.batch_uns_done:
+    pop         r14
     pop         r13
     pop         r12
     ret
@@ -1613,6 +1916,7 @@ tangent_x86_batch_unscaled_qn:
 ; Batched arbitrary-size tangent S nodes.
 ; data, offsets, node_count, quarter, tangent factor
 global tangent_x86_batch_tangent_qn
+align 64
 tangent_x86_batch_tangent_qn:
     push        r12
     push        r13
@@ -1650,7 +1954,6 @@ tangent_x86_batch_tangent_qn:
     inc         rax
     jmp         .batch_tn_loop_node
 .batch_tn_done:
-    vzeroupper
     pop         r14
     pop         r13
     pop         r12
@@ -1659,6 +1962,7 @@ tangent_x86_batch_tangent_qn:
 ; Batched arbitrary-size S2 nodes.
 ; data, offsets, node_count, quarter, factor, low, high=[rsp+8]
 global tangent_x86_batch_s2_qn
+align 64
 tangent_x86_batch_s2_qn:
     push        rbx
     push        r12
@@ -1712,7 +2016,6 @@ tangent_x86_batch_s2_qn:
     inc         rax
     jmp         .batch_s2n_loop_node
 .batch_s2n_done:
-    vzeroupper
     pop         r15
     pop         r14
     pop         r13
@@ -1724,6 +2027,7 @@ tangent_x86_batch_s2_qn:
 ; data, offsets, node_count, quarter, factor, scale0,
 ; scale1=[rsp+8], scale2=[rsp+16], scale3=[rsp+24]
 global tangent_x86_batch_s4_qn
+align 64
 tangent_x86_batch_s4_qn:
     push        rbx
     push        rbp
@@ -1779,7 +2083,6 @@ tangent_x86_batch_s4_qn:
     inc         rax
     jmp         .batch_s4n_loop_node
 .batch_s4n_done:
-    vzeroupper
     pop         r15
     pop         r14
     pop         r13

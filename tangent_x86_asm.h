@@ -3,6 +3,7 @@
 
 #include "fft.h"
 
+void tangent_x86_zeroupper(void);
 void tangent_x86_permute(const fft_complex *input,
                          fft_complex *output,
                          const uint32_t *permutation,
@@ -55,12 +56,37 @@ void tangent_x86_gather_fft32_normal(const fft_complex *input,
                                      const uint32_t *permutation,
                                      const fft_complex *tables,
                                      const fft_complex *factor);
+void tangent_x86_gather_fft16_normal(const fft_complex *input,
+                                     fft_complex *output,
+                                     const uint32_t *permutation,
+                                     const fft_complex *tables);
 void tangent_x86_gather_fft64_normal(const fft_complex *input,
                                      fft_complex *output,
                                      const uint32_t *permutation,
                                      const fft_complex *tables,
                                      const fft_complex *level5_factor,
                                      const fft_complex *level6_factor);
+void tangent_x86_gather_fft128_normal(const fft_complex *input,
+                                      fft_complex *output,
+                                      const uint32_t *permutation,
+                                      const fft_complex *tables,
+                                      const fft_complex *level5_scaled,
+                                      const fft_complex *level5_tangent,
+                                      const fft_complex *level6_scaled,
+                                      const fft_complex *level7_scaled);
+void tangent_x86_gather_fft256_normal(
+    const fft_complex *input,
+    fft_complex *output,
+    const uint32_t *permutation,
+    const fft_complex *tables,
+    const fft_complex *level5_scaled,
+    const fft_complex *level5_tangent,
+    const fft_complex *level5_s2_low,
+    const fft_complex *level5_s2_high,
+    const fft_complex *level6_scaled,
+    const fft_complex *level6_tangent,
+    const fft_complex *level7_scaled,
+    const fft_complex *level8_scaled);
 /*
  * All counts are multiples of four complex samples.  data and each coefficient
  * pointer are already advanced to the first butterfly in the requested range.
@@ -173,6 +199,12 @@ void tangent_x86_batch_unscaled_qn(fft_complex *data,
                                    size_t node_count,
                                    size_t quarter,
                                    const fft_complex *factor);
+void tangent_x86_batch_unscaled_qn_split(fft_complex *data,
+                                         const uint32_t *offsets,
+                                         size_t node_count,
+                                         size_t quarter,
+                                         const fft_complex *factor_real,
+                                         const fft_complex *factor_imag);
 void tangent_x86_batch_tangent_qn(fft_complex *data,
                                   const uint32_t *offsets,
                                   size_t node_count,

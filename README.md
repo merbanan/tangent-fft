@@ -1,12 +1,14 @@
 # Tangent FFT comparison
 
-This repository contains sixteen single-precision complex FFT benchmark
+This repository contains twenty-two single-precision complex FFT benchmark
 entries, each supporting forward and normalized inverse transforms:
 
 - iterative radix-2 Cooley–Tukey in C;
 - recursive conjugate-pair split-radix in C;
 - a planned, non-recursive tangent FFT in C;
 - `tangent-x86-asm`, an AVX2/FMA tangent FFT for x86-64;
+- tangent FFT assembly kernels exposed at SSE, SSE2, SSE3, SSSE3, SSE4.1,
+  and SSE4.2 runtime boundaries;
 - `lane4-c`, a plain-C lane-factorized FFT compiled with automatic
   vectorization disabled;
 - a complete FFmpeg-style x86inc/NASM lane4 SSE execution path, exposed at
@@ -35,6 +37,7 @@ make
 make test
 make bench
 make ffmpeg-cycles
+make tangent-cycles
 make lane4-experiment
 ```
 
@@ -60,9 +63,9 @@ timings. The FFmpeg row includes the copies into and out of its aligned AVTX
 buffers, matching this project's in-place public API. The harness prints all
 results to the console and can also write CSV.
 
-Each x86 lane4 entry is runtime-gated by CPUID. `tangent-x86-asm` is enabled
-when the host is x86-64 with AVX2 and FMA. Portable C algorithms remain
-available on other targets.
+Each x86 lane4 and tangent-SSE entry is runtime-gated by CPUID.
+`tangent-x86-asm` is enabled when the host is x86-64 with AVX2 and FMA.
+Portable C algorithms remain available on other targets.
 
 ## Lane-factorized implementations
 
@@ -110,6 +113,11 @@ assembly path goes further:
 - a dedicated register-resident FFT32 kernel removes the small-size call tree;
 - a fixed FFT64 carries its final FFT16 child into the parent, removing four
   stores and four reloads;
+- fixed FFT128 and FFT256 trees remove level/family dispatch and offset loops;
+- execution-ordered normal factors are preduplicated into real and imaginary
+  streams, replacing two hot-loop shuffles with one load;
+- scheduled transforms keep AVX state live across assembly batches and issue
+  one `vzeroupper` at the C boundary;
 - four complex samples are processed per YMM register;
 - FMA implements general and reduced tangent complex products;
 - larger nodes are batched by level and transform family, with no recursive
@@ -151,29 +159,38 @@ The checked-in `benchmark.csv` comes from:
 
 Median execution times in microseconds:
 
-| N | radix-2 | tangent C | tangent-x86-asm | lane4-avx2-fma | FFmpeg AVTX |
-|---:|---:|---:|---:|---:|---:|
-| 16 | 0.110 | 0.090 | 0.050 | 0.030 | 0.050 |
-| 32 | 0.230 | 0.190 | 0.050 | 0.040 | 0.060 |
-| 64 | 0.530 | 0.420 | 0.090 | 0.060 | 0.110 |
-| 128 | 1.230 | 0.850 | 0.190 | 0.090 | 0.180 |
-| 256 | 2.710 | 1.830 | 0.350 | 0.170 | 0.340 |
-| 512 | 6.010 | 3.850 | 0.710 | 0.370 | 0.690 |
-| 1024 | 13.010 | 8.260 | 1.430 | 0.790 | 1.470 |
-| 2048 | 28.210 | 17.530 | 3.080 | 1.790 | 3.230 |
-| 4096 | 60.930 | 37.960 | 6.950 | 4.150 | 7.590 |
-| 8192 | 134.980 | 85.740 | 18.470 | 9.800 | 21.700 |
+| N | radix-2 | tangent C | tangent SSE3 | tangent AVX2/FMA | lane4 AVX2/FMA | FFmpeg AVTX |
+|---:|---:|---:|---:|---:|---:|---:|
+| 16 | 0.130 | 0.110 | 0.070 | 0.040 | 0.040 | 0.060 |
+| 32 | 0.290 | 0.220 | 0.130 | 0.060 | 0.050 | 0.070 |
+| 64 | 0.670 | 0.480 | 0.230 | 0.100 | 0.070 | 0.120 |
+| 128 | 1.230 | 0.830 | 0.380 | 0.160 | 0.090 | 0.170 |
+| 256 | 2.740 | 1.750 | 0.760 | 0.330 | 0.180 | 0.340 |
+| 512 | 6.160 | 3.720 | 1.560 | 0.730 | 0.390 | 0.690 |
+| 1024 | 13.090 | 7.961 | 3.290 | 1.440 | 0.790 | 1.480 |
+| 2048 | 28.230 | 16.870 | 6.950 | 3.000 | 1.820 | 3.230 |
+| 4096 | 61.040 | 36.690 | 15.350 | 6.960 | 4.160 | 7.560 |
+| 8192 | 134.790 | 83.060 | 35.820 | 18.630 | 10.330 | 21.300 |
 
-Cycle-accurate comparisons are recorded in the lane-factorized report.
+The wall-clock timer is quantized at 0.01 µs for the smallest transforms.
+The longer-batch `make tangent-cycles` run is more discriminating: tangent
+AVX is faster than FFmpeg at 16, 64, and 1024–8192; tied within 0.2% at
+128/256; 7.3% slower at 32; and 5.7% slower at 512 on this run.
 
 The vendored FFmpeg FMA3 split-radix leaves are also patched with exact
 sign-folding reductions. A five-pair cycle A/B against the unmodified pinned
 source measured median gains of 0.17–0.96% from 64 through 8192 on this host.
 `make ffmpeg-cycles` runs the longer-batch FFmpeg-only cycle harness.
+`make tangent-cycles` reports the tangent AVX and representative SSE paths
+beside FFmpeg through the same public in-place API.
 
 The investigation of FFmpeg's x86 FFT optimization TODOs, including retained
 and rejected assembly experiments, is in
 [`docs/ffmpeg-todo-investigation.md`](docs/ffmpeg-todo-investigation.md).
+The follow-up tangent work is documented in
+[`docs/tangent-assembly-optimization.md`](docs/tangent-assembly-optimization.md);
+unsuccessful experiments are collected separately in
+[`docs/rejected-tangent-experiments.md`](docs/rejected-tangent-experiments.md).
 
 Results vary with CPU, frequency policy, compiler, and system load; regenerate
 `benchmark.csv` on the target machine rather than treating these values as

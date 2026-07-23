@@ -3,6 +3,7 @@
 #include "lane4_portable.h"
 #if HAVE_TANGENT_X86_ASM
 #include "lane4_fft.h"
+#include "tangent_sse_asm.h"
 #include "tangent_x86_asm.h"
 #endif
 
@@ -82,6 +83,8 @@ struct fft_plan {
     fft_complex **x86_s4_1;
     fft_complex **x86_s4_2;
     fft_complex **x86_s4_3;
+    fft_complex **x86_scaled_real;
+    fft_complex **x86_scaled_imag;
 
     fft_complex *scratch;
     ffmpeg_fft_plan *ffmpeg;
@@ -483,7 +486,9 @@ static int create_transform_tables(fft_plan *plan)
         !allocate_complex_table(&plan->x86_s4_0, count) ||
         !allocate_complex_table(&plan->x86_s4_1, count) ||
         !allocate_complex_table(&plan->x86_s4_2, count) ||
-        !allocate_complex_table(&plan->x86_s4_3, count)) {
+        !allocate_complex_table(&plan->x86_s4_3, count) ||
+        !allocate_complex_table(&plan->x86_scaled_real, count) ||
+        !allocate_complex_table(&plan->x86_scaled_imag, count)) {
         return 0;
     }
 
@@ -528,7 +533,13 @@ static int create_transform_tables(fft_plan *plan)
                 !create_complex_level(plan->x86_s4_0, level, quarter) ||
                 !create_complex_level(plan->x86_s4_1, level, quarter) ||
                 !create_complex_level(plan->x86_s4_2, level, quarter) ||
-                !create_complex_level(plan->x86_s4_3, level, quarter)) {
+                !create_complex_level(plan->x86_s4_3, level, quarter) ||
+                !create_complex_level(plan->x86_scaled_real,
+                                      level,
+                                      quarter) ||
+                !create_complex_level(plan->x86_scaled_imag,
+                                      level,
+                                      quarter)) {
                 return 0;
             }
 
@@ -580,6 +591,12 @@ static int create_transform_tables(fft_plan *plan)
                     plan->x86_s4_2[level][k].im = plan->s4_2[level][k];
                 plan->x86_s4_3[level][k].re =
                     plan->x86_s4_3[level][k].im = plan->s4_3[level][k];
+                plan->x86_scaled_real[level][k].re =
+                    plan->x86_scaled_real[level][k].im =
+                        plan->scaled_twiddle[level][k].re;
+                plan->x86_scaled_imag[level][k].re =
+                    plan->x86_scaled_imag[level][k].im =
+                        plan->scaled_twiddle[level][k].im;
             }
         }
     }
@@ -1118,6 +1135,8 @@ void fft_plan_destroy(fft_plan *plan)
     free_complex_table(plan->x86_s4_1, plan->table_levels);
     free_complex_table(plan->x86_s4_2, plan->table_levels);
     free_complex_table(plan->x86_s4_3, plan->table_levels);
+    free_complex_table(plan->x86_scaled_real, plan->table_levels);
+    free_complex_table(plan->x86_scaled_imag, plan->table_levels);
     free(plan->tangent_permutation);
     if (plan->blocked_permutation != NULL) {
         unsigned level;
@@ -1152,6 +1171,16 @@ int fft_plan_supports(const fft_plan *plan, fft_algorithm algorithm)
     }
     if (algorithm == FFT_TANGENT_X86_ASM) {
         return plan->tangent_x86_asm_available;
+    }
+    if (algorithm >= FFT_TANGENT_SSE &&
+        algorithm <= FFT_TANGENT_SSE42) {
+#if HAVE_TANGENT_X86_ASM
+        const unsigned feature =
+            1U << (unsigned)(algorithm - FFT_TANGENT_SSE);
+        return (plan->lane4_cpu_features & feature) != 0;
+#else
+        return 0;
+#endif
     }
     if (algorithm == FFT_LANE4_C) {
         return plan->lane4_portable != NULL;
@@ -1690,6 +1719,7 @@ static inline void gather_tangent_leaf_x86(
     }
 #undef DISPATCH_GATHER
 }
+
 #endif
 
 static void tangent_fft_scheduled(const fft_plan *plan,
@@ -1834,6 +1864,16 @@ static void tangent_fft_scheduled(const fft_plan *plan,
 
 #if HAVE_TANGENT_X86_ASM
     if (use_x86_asm) {
+        if (fuse_x86_gather && plan->n == 16) {
+            tangent_x86_gather_fft16_normal(
+                data,
+                data,
+                plan->tangent_permutation,
+                plan->x86_leaf_tables);
+            work = data;
+            output_is_scratch = 0;
+            goto tangent_x86_nodes_done;
+        }
         if (fuse_x86_gather && plan->n == 32) {
             tangent_x86_gather_fft32_normal(
                 data,
@@ -1841,6 +1881,7 @@ static void tangent_fft_scheduled(const fft_plan *plan,
                 plan->tangent_permutation,
                 plan->x86_leaf_tables,
                 plan->scaled_twiddle[5]);
+            output_is_scratch = 0;
             goto tangent_x86_nodes_done;
         }
         if (fuse_x86_gather && plan->n == 64) {
@@ -1851,6 +1892,35 @@ static void tangent_fft_scheduled(const fft_plan *plan,
                 plan->x86_leaf_tables,
                 plan->scaled_twiddle[5],
                 plan->scaled_twiddle[6]);
+            output_is_scratch = 0;
+            goto tangent_x86_nodes_done;
+        }
+        if (fuse_x86_gather && plan->n == 128) {
+            tangent_x86_gather_fft128_normal(
+                data,
+                work,
+                plan->tangent_permutation,
+                plan->x86_leaf_tables,
+                plan->scaled_twiddle[5],
+                plan->tangent_twiddle[5],
+                plan->scaled_twiddle[6],
+                plan->scaled_twiddle[7]);
+            goto tangent_x86_nodes_done;
+        }
+        if (fuse_x86_gather && plan->n == 256) {
+            tangent_x86_gather_fft256_normal(
+                data,
+                work,
+                plan->tangent_permutation,
+                plan->x86_leaf_tables,
+                plan->scaled_twiddle[5],
+                plan->tangent_twiddle[5],
+                plan->x86_s2_low[5],
+                plan->x86_s2_high[5],
+                plan->scaled_twiddle[6],
+                plan->tangent_twiddle[6],
+                plan->scaled_twiddle[7],
+                plan->scaled_twiddle[8]);
             goto tangent_x86_nodes_done;
         }
         if (plan->levels == 1) {
@@ -2058,12 +2128,13 @@ static void tangent_fft_scheduled(const fft_plan *plan,
             size_t count = plan->x86_node_count[group];
             const size_t quarter = level_size(level) / 4;
             if (count != 0) {
-                tangent_x86_batch_unscaled_qn(
+                tangent_x86_batch_unscaled_qn_split(
                     work,
                     plan->x86_node_offsets + begin,
                     count,
                     quarter,
-                    plan->scaled_twiddle[level]);
+                    plan->x86_scaled_real[level],
+                    plan->x86_scaled_imag[level]);
             }
 
             group = (size_t)level * 4 + TANGENT_S;
@@ -2118,6 +2189,9 @@ static void tangent_fft_scheduled(const fft_plan *plan,
         }
 tangent_x86_nodes_done:
         (void)0;
+        if (plan->n >= 512) {
+            tangent_x86_zeroupper();
+        }
 #ifdef TANGENT_PROFILE
         if (profile_enabled) {
             timespec_get(&profile_time[3], TIME_UTC);
@@ -2195,6 +2269,178 @@ tangent_x86_nodes_done:
 #endif
 }
 
+#if HAVE_TANGENT_X86_ASM
+typedef void (*tangent_sse_unscaled_fn)(
+    fft_complex *, const uint32_t *, size_t, size_t, const fft_complex *);
+typedef void (*tangent_sse_leaf_fn)(
+    fft_complex *,
+    const uint32_t *,
+    size_t,
+    const fft_complex *,
+    unsigned);
+typedef void (*tangent_sse_gather_leaf_fn)(
+    const fft_complex *,
+    fft_complex *,
+    const uint32_t *,
+    const uint32_t *,
+    size_t,
+    const fft_complex *,
+    unsigned);
+typedef void (*tangent_sse_s2_fn)(
+    fft_complex *,
+    const uint32_t *,
+    size_t,
+    size_t,
+    const fft_complex *,
+    const fft_complex *,
+    const fft_complex *);
+typedef void (*tangent_sse_s4_fn)(
+    fft_complex *,
+    const uint32_t *,
+    size_t,
+    size_t,
+    const fft_complex *,
+    const fft_complex *,
+    const fft_complex *,
+    const fft_complex *,
+    const fft_complex *);
+
+static void tangent_fft_sse_scheduled(const fft_plan *plan,
+                                      fft_complex *data,
+                                      int use_sse3)
+{
+    tangent_sse_unscaled_fn unscaled =
+        use_sse3 ? tangent_sse3_batch_unscaled
+                 : tangent_sse_batch_unscaled;
+    tangent_sse_unscaled_fn tangent =
+        use_sse3 ? tangent_sse3_batch_tangent
+                 : tangent_sse_batch_tangent;
+    tangent_sse_s2_fn s2 =
+        use_sse3 ? tangent_sse3_batch_s2 : tangent_sse_batch_s2;
+    tangent_sse_s4_fn s4 =
+        use_sse3 ? tangent_sse3_batch_s4 : tangent_sse_batch_s4;
+    fft_complex *work;
+    size_t i;
+    unsigned kind;
+    unsigned level;
+    const int fuse_gather = plan->n >= 8192;
+
+    if (plan->n < 4) {
+        tangent_fft_scheduled(plan, data, 0);
+        return;
+    }
+
+    work = plan->scratch;
+    if (!fuse_gather) {
+        for (i = 0; i < plan->n; ++i) {
+            work[i] = data[plan->tangent_permutation[i]];
+        }
+    }
+
+    for (level = 2;
+         level <= 4 && level <= plan->levels;
+         ++level) {
+        tangent_sse_gather_leaf_fn gather_leaf;
+        tangent_sse_leaf_fn local_leaf;
+        if (use_sse3) {
+            gather_leaf = level == 2 ? tangent_sse3_gather_leaf2
+                          : level == 3 ? tangent_sse3_gather_leaf3
+                                       : tangent_sse3_gather_leaf4;
+            local_leaf = level == 2 ? tangent_sse3_batch_leaf2
+                         : level == 3 ? tangent_sse3_batch_leaf3
+                                      : tangent_sse3_batch_leaf4;
+        } else {
+            gather_leaf = level == 2 ? tangent_sse_gather_leaf2
+                          : level == 3 ? tangent_sse_gather_leaf3
+                                       : tangent_sse_gather_leaf4;
+            local_leaf = level == 2 ? tangent_sse_batch_leaf2
+                         : level == 3 ? tangent_sse_batch_leaf3
+                                      : tangent_sse_batch_leaf4;
+        }
+        for (kind = TANGENT_NORMAL; kind <= TANGENT_S4; ++kind) {
+            const size_t group = (size_t)level * 4 + kind;
+            const size_t begin = plan->x86_leaf_start[group];
+            const size_t count = plan->x86_leaf_count[group];
+            if (count != 0) {
+                if (fuse_gather) {
+                    gather_leaf(data,
+                                work,
+                                plan->tangent_permutation,
+                                plan->x86_leaf_offsets + begin,
+                                count,
+                                plan->x86_leaf_tables,
+                                kind);
+                } else {
+                    local_leaf(work,
+                               plan->x86_leaf_offsets + begin,
+                               count,
+                               plan->x86_leaf_tables,
+                               kind);
+                }
+            }
+        }
+    }
+
+    for (level = 5; level <= plan->levels; ++level) {
+        const size_t quarter = level_size(level - 2);
+        size_t group = (size_t)level * 4 + TANGENT_NORMAL;
+        size_t begin = plan->x86_node_start[group];
+        size_t count = plan->x86_node_count[group];
+
+        if (count != 0) {
+            unscaled(work,
+                     plan->x86_node_offsets + begin,
+                     count,
+                     quarter,
+                     plan->scaled_twiddle[level]);
+        }
+
+        group = (size_t)level * 4 + TANGENT_S;
+        begin = plan->x86_node_start[group];
+        count = plan->x86_node_count[group];
+        if (count != 0) {
+            tangent_sse_unscaled_fn s_function =
+                quarter >= 16 ? tangent : unscaled;
+            s_function(work,
+                       plan->x86_node_offsets + begin,
+                       count,
+                       quarter,
+                       plan->tangent_twiddle[level]);
+        }
+
+        group = (size_t)level * 4 + TANGENT_S2;
+        begin = plan->x86_node_start[group];
+        count = plan->x86_node_count[group];
+        if (count != 0) {
+            s2(work,
+               plan->x86_node_offsets + begin,
+               count,
+               quarter,
+               plan->tangent_twiddle[level],
+               plan->x86_s2_low[level],
+               plan->x86_s2_high[level]);
+        }
+
+        group = (size_t)level * 4 + TANGENT_S4;
+        begin = plan->x86_node_start[group];
+        count = plan->x86_node_count[group];
+        if (count != 0) {
+            s4(work,
+               plan->x86_node_offsets + begin,
+               count,
+               quarter,
+               plan->tangent_twiddle[level],
+               plan->x86_s4_0[level],
+               plan->x86_s4_1[level],
+               plan->x86_s4_2[level],
+               plan->x86_s4_3[level]);
+        }
+    }
+
+    memcpy(data, work, plan->n * sizeof(*data));
+}
+#endif
+
 int fft_execute(fft_plan *plan, fft_algorithm algorithm, fft_complex *data)
 {
     if (plan == NULL || data == NULL) {
@@ -2202,6 +2448,11 @@ int fft_execute(fft_plan *plan, fft_algorithm algorithm, fft_complex *data)
     }
     if (algorithm >= FFT_LANE4_C &&
         algorithm <= FFT_LANE4_AVX2_FMA &&
+        !fft_plan_supports(plan, algorithm)) {
+        return -1;
+    }
+    if (algorithm >= FFT_TANGENT_SSE &&
+        algorithm <= FFT_TANGENT_SSE42 &&
         !fft_plan_supports(plan, algorithm)) {
         return -1;
     }
@@ -2225,6 +2476,26 @@ int fft_execute(fft_plan *plan, fft_algorithm algorithm, fft_complex *data)
         }
         tangent_fft_scheduled(plan, data, 1);
         return 0;
+#if HAVE_TANGENT_X86_ASM
+    case FFT_TANGENT_SSE:
+    case FFT_TANGENT_SSE2:
+        tangent_fft_sse_scheduled(plan, data, 0);
+        return 0;
+    case FFT_TANGENT_SSE3:
+    case FFT_TANGENT_SSSE3:
+    case FFT_TANGENT_SSE41:
+    case FFT_TANGENT_SSE42:
+        tangent_fft_sse_scheduled(plan, data, 1);
+        return 0;
+#else
+    case FFT_TANGENT_SSE:
+    case FFT_TANGENT_SSE2:
+    case FFT_TANGENT_SSE3:
+    case FFT_TANGENT_SSSE3:
+    case FFT_TANGENT_SSE41:
+    case FFT_TANGENT_SSE42:
+        return -1;
+#endif
     case FFT_LANE4_C:
         return lane4_c_execute(plan->lane4_portable, data);
 #if HAVE_TANGENT_X86_ASM
@@ -2313,6 +2584,18 @@ const char *fft_algorithm_name(fft_algorithm algorithm)
         return "tangent";
     case FFT_TANGENT_X86_ASM:
         return "tangent-x86-asm";
+    case FFT_TANGENT_SSE:
+        return "tangent-sse";
+    case FFT_TANGENT_SSE2:
+        return "tangent-sse2";
+    case FFT_TANGENT_SSE3:
+        return "tangent-sse3";
+    case FFT_TANGENT_SSSE3:
+        return "tangent-ssse3";
+    case FFT_TANGENT_SSE41:
+        return "tangent-sse4.1";
+    case FFT_TANGENT_SSE42:
+        return "tangent-sse4.2";
     case FFT_LANE4_C:
         return "lane4-c";
     case FFT_LANE4_SSE:
@@ -2367,7 +2650,13 @@ uint64_t fft_theoretical_flops(fft_algorithm algorithm, size_t n)
         result = 4 * (int64_t)n * log_n - 6 * (int64_t)n + 8;
         break;
     case FFT_TANGENT:
-    case FFT_TANGENT_X86_ASM: {
+    case FFT_TANGENT_X86_ASM:
+    case FFT_TANGENT_SSE:
+    case FFT_TANGENT_SSE2:
+    case FFT_TANGENT_SSE3:
+    case FFT_TANGENT_SSSE3:
+    case FFT_TANGENT_SSE41:
+    case FFT_TANGENT_SSE42: {
         const int parity = (log_n & 1U) != 0 ? -1 : 1;
         const int64_t numerator =
             102 * (int64_t)n * log_n - 124 * (int64_t)n -
