@@ -1,6 +1,6 @@
 # Tangent FFT comparison
 
-This repository contains twenty-two single-precision complex FFT benchmark
+This repository contains twenty-three single-precision complex FFT benchmark
 entries, each supporting forward and normalized inverse transforms:
 
 - iterative radix-2 Cooley–Tukey in C;
@@ -13,6 +13,8 @@ entries, each supporting forward and normalized inverse transforms:
   vectorization disabled;
 - a complete FFmpeg-style x86inc/NASM lane4 SSE execution path, exposed at
   SSE, SSE2, SSE3, SSSE3, SSE4.1, and SSE4.2 runtime boundaries;
+- `lane2-sse`, a baseline-SSE assembly FFT that packs two complete
+  interleaved complex values in each XMM register;
 - lane4 kernels for AVX,
   AVX+FMA, AVX2, and AVX2+FMA;
 - FFmpeg `libavutil` AVTX, built locally from pinned source.
@@ -38,6 +40,7 @@ make test
 make bench
 make ffmpeg-cycles
 make tangent-cycles
+make lane2-cycles
 make lane4-experiment
 ```
 
@@ -63,11 +66,19 @@ timings. The FFmpeg row includes the copies into and out of its aligned AVTX
 buffers, matching this project's in-place public API. The harness prints all
 results to the console and can also write CSV.
 
-Each x86 lane4 and tangent-SSE entry is runtime-gated by CPUID.
+Each x86 lane2, lane4, and tangent-SSE entry is runtime-gated by CPUID.
 `tangent-x86-asm` is enabled when the host is x86-64 with AVX2 and FMA.
 Portable C algorithms remain available on other targets.
 
 ## Lane-factorized implementations
+
+For `N=2M`, `lane2-sse` computes the even and odd length-`M` residue
+transforms together in one XMM register. It uses a mixed-radix permutation,
+register-resident FFT4/FFT8 leaves, block-major radix-4 upper stages, and a
+fused two-row transpose/twiddle/FFT2 finish. It is genuine baseline SSE
+assembly and contains no AVX/VEX instructions. Its implementation and
+measurements are described in
+[`docs/lane2-sse.md`](docs/lane2-sse.md).
 
 For `N=4M`, every lane4 implementation computes the four length-`M`
 transforms from `x[4m+r]` in parallel. The plain-C implementation makes the
@@ -159,18 +170,18 @@ The checked-in `benchmark.csv` comes from:
 
 Median execution times in microseconds:
 
-| N | radix-2 | tangent C | tangent SSE3 | tangent AVX2/FMA | lane4 AVX2/FMA | FFmpeg AVTX |
-|---:|---:|---:|---:|---:|---:|---:|
-| 16 | 0.130 | 0.110 | 0.070 | 0.040 | 0.040 | 0.060 |
-| 32 | 0.290 | 0.220 | 0.130 | 0.060 | 0.050 | 0.070 |
-| 64 | 0.670 | 0.480 | 0.230 | 0.100 | 0.070 | 0.120 |
-| 128 | 1.230 | 0.830 | 0.380 | 0.160 | 0.090 | 0.170 |
-| 256 | 2.740 | 1.750 | 0.760 | 0.330 | 0.180 | 0.340 |
-| 512 | 6.160 | 3.720 | 1.560 | 0.730 | 0.390 | 0.690 |
-| 1024 | 13.090 | 7.961 | 3.290 | 1.440 | 0.790 | 1.480 |
-| 2048 | 28.230 | 16.870 | 6.950 | 3.000 | 1.820 | 3.230 |
-| 4096 | 61.040 | 36.690 | 15.350 | 6.960 | 4.160 | 7.560 |
-| 8192 | 134.790 | 83.060 | 35.820 | 18.630 | 10.330 | 21.300 |
+| N | radix-2 | tangent C | tangent SSE3 | tangent AVX2/FMA | lane2 SSE | lane4 AVX2/FMA | FFmpeg AVTX |
+|---:|---:|---:|---:|---:|---:|---:|---:|
+| 16 | 0.130 | 0.120 | 0.080 | 0.040 | 0.040 | 0.040 | 0.060 |
+| 32 | 0.290 | 0.220 | 0.130 | 0.060 | 0.060 | 0.050 | 0.070 |
+| 64 | 0.650 | 0.490 | 0.230 | 0.110 | 0.080 | 0.060 | 0.100 |
+| 128 | 1.200 | 0.820 | 0.360 | 0.160 | 0.160 | 0.090 | 0.160 |
+| 256 | 2.710 | 1.750 | 0.750 | 0.360 | 0.330 | 0.180 | 0.340 |
+| 512 | 5.950 | 3.720 | 1.550 | 0.720 | 0.760 | 0.370 | 0.690 |
+| 1024 | 12.890 | 7.920 | 3.280 | 1.420 | 1.590 | 0.790 | 1.470 |
+| 2048 | 27.910 | 16.980 | 6.970 | 3.000 | 3.670 | 1.810 | 3.250 |
+| 4096 | 60.670 | 36.491 | 15.330 | 7.000 | 7.870 | 4.160 | 7.480 |
+| 8192 | 134.491 | 82.780 | 35.830 | 18.330 | 20.411 | 9.840 | 21.470 |
 
 The wall-clock timer is quantized at 0.01 µs for the smallest transforms.
 The longer-batch `make tangent-cycles` run is more discriminating: tangent
@@ -183,6 +194,8 @@ source measured median gains of 0.17–0.96% from 64 through 8192 on this host.
 `make ffmpeg-cycles` runs the longer-batch FFmpeg-only cycle harness.
 `make tangent-cycles` reports the tangent AVX and representative SSE paths
 beside FFmpeg through the same public in-place API.
+`make lane2-cycles` compares lane2-SSE, lane4-SSE, and FFmpeg with serialized
+TSC measurements.
 
 The investigation of FFmpeg's x86 FFT optimization TODOs, including retained
 and rejected assembly experiments, is in

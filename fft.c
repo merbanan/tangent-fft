@@ -2,6 +2,7 @@
 #include "ffmpeg_fft.h"
 #include "lane4_portable.h"
 #if HAVE_TANGENT_X86_ASM
+#include "lane2_sse.h"
 #include "lane4_fft.h"
 #include "tangent_sse_asm.h"
 #include "tangent_x86_asm.h"
@@ -90,6 +91,7 @@ struct fft_plan {
     ffmpeg_fft_plan *ffmpeg;
     lane4_portable_plan *lane4_portable;
 #if HAVE_TANGENT_X86_ASM
+    lane2_sse_plan *lane2_sse;
     lane4_fft_plan *lane4;
     lane4_avx_fft_plan *lane4_avx;
     lane4_avx_fma_fft_plan *lane4_avx_fma;
@@ -1050,6 +1052,10 @@ fft_plan *fft_plan_create(size_t n)
         }
 #if HAVE_TANGENT_X86_ASM
         if (n >= 16 &&
+            (plan->lane4_cpu_features & LANE4_CPU_SSE) != 0) {
+            plan->lane2_sse = lane2_sse_plan_create(n);
+        }
+        if (n >= 16 &&
             (plan->lane4_cpu_features & LANE4_CPU_AVX) != 0) {
             plan->lane4_avx = lane4_avx_fft_plan_create(n);
         }
@@ -1075,6 +1081,9 @@ fft_plan *fft_plan_create(size_t n)
         (n <= 131072 && plan->ffmpeg == NULL) ||
         (n >= 16 && n <= 131072 && plan->lane4_portable == NULL) ||
 #if HAVE_TANGENT_X86_ASM
+        (n >= 16 && n <= 131072 &&
+         (plan->lane4_cpu_features & LANE4_CPU_SSE) != 0 &&
+         plan->lane2_sse == NULL) ||
         (n >= 16 && n <= 131072 &&
          (plan->lane4_cpu_features & LANE4_CPU_AVX) != 0 &&
          plan->lane4_avx == NULL) ||
@@ -1113,6 +1122,7 @@ void fft_plan_destroy(fft_plan *plan)
     ffmpeg_fft_plan_destroy(plan->ffmpeg);
     lane4_portable_plan_destroy(plan->lane4_portable);
 #if HAVE_TANGENT_X86_ASM
+    lane2_sse_plan_destroy(plan->lane2_sse);
     lane4_fft_plan_destroy(plan->lane4);
     lane4_avx_fft_plan_destroy(plan->lane4_avx);
     lane4_avx_fma_fft_plan_destroy(plan->lane4_avx_fma);
@@ -1184,6 +1194,13 @@ int fft_plan_supports(const fft_plan *plan, fft_algorithm algorithm)
     }
     if (algorithm == FFT_LANE4_C) {
         return plan->lane4_portable != NULL;
+    }
+    if (algorithm == FFT_LANE2_SSE) {
+#if HAVE_TANGENT_X86_ASM
+        return plan->lane2_sse != NULL;
+#else
+        return 0;
+#endif
     }
     if (algorithm >= FFT_LANE4_SSE &&
         algorithm <= FFT_LANE4_SSE42) {
@@ -2456,6 +2473,10 @@ int fft_execute(fft_plan *plan, fft_algorithm algorithm, fft_complex *data)
         !fft_plan_supports(plan, algorithm)) {
         return -1;
     }
+    if (algorithm == FFT_LANE2_SSE &&
+        !fft_plan_supports(plan, algorithm)) {
+        return -1;
+    }
 
     switch (algorithm) {
     case FFT_RADIX2:
@@ -2519,6 +2540,8 @@ int fft_execute(fft_plan *plan, fft_algorithm algorithm, fft_complex *data)
         return lane4_avx2_fft_execute(plan->lane4_avx2, data);
     case FFT_LANE4_AVX2_FMA:
         return lane4_fft_execute(plan->lane4, data);
+    case FFT_LANE2_SSE:
+        return lane2_sse_execute(plan->lane2_sse, data);
 #else
     case FFT_LANE4_SSE:
     case FFT_LANE4_SSE2:
@@ -2530,6 +2553,7 @@ int fft_execute(fft_plan *plan, fft_algorithm algorithm, fft_complex *data)
     case FFT_LANE4_AVX_FMA:
     case FFT_LANE4_AVX2:
     case FFT_LANE4_AVX2_FMA:
+    case FFT_LANE2_SSE:
         return -1;
 #endif
     case FFT_FFMPEG:
@@ -2618,6 +2642,8 @@ const char *fft_algorithm_name(fft_algorithm algorithm)
         return "lane4-avx2";
     case FFT_LANE4_AVX2_FMA:
         return "lane4-avx2-fma";
+    case FFT_LANE2_SSE:
+        return "lane2-sse";
     case FFT_FFMPEG:
         return "ffmpeg-avtx";
     default:
@@ -2631,6 +2657,7 @@ uint64_t fft_theoretical_flops(fft_algorithm algorithm, size_t n)
     int64_t result;
 
     if (algorithm == FFT_FFMPEG ||
+        algorithm == FFT_LANE2_SSE ||
         (algorithm >= FFT_LANE4_C &&
          algorithm <= FFT_LANE4_AVX2_FMA)) {
         return 0;
@@ -2676,6 +2703,7 @@ uint64_t fft_theoretical_flops(fft_algorithm algorithm, size_t n)
     case FFT_LANE4_AVX_FMA:
     case FFT_LANE4_AVX2:
     case FFT_LANE4_AVX2_FMA:
+    case FFT_LANE2_SSE:
     case FFT_FFMPEG:
         return 0;
     default:

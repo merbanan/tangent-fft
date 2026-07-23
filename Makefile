@@ -15,8 +15,11 @@ ifeq ($(HOST_ARCH),x86_64)
 CPPFLAGS += -DHAVE_TANGENT_X86_ASM=1
 LANE4_X86_OBJECTS := lane4_avx.o lane4_avx_fma.o \
 	lane4_avx2.o lane4_fft.o lane4_sse_stage.o
-CORE_OBJECTS += tangent_x86_kernel.o tangent_sse_stage.o $(LANE4_X86_OBJECTS)
-OBJECTS += tangent_x86_kernel.o tangent_sse_stage.o $(LANE4_X86_OBJECTS)
+LANE2_X86_OBJECTS := lane2_sse.o lane2_sse_stage.o
+CORE_OBJECTS += tangent_x86_kernel.o tangent_sse_stage.o \
+	$(LANE4_X86_OBJECTS) $(LANE2_X86_OBJECTS)
+OBJECTS += tangent_x86_kernel.o tangent_sse_stage.o \
+	$(LANE4_X86_OBJECTS) $(LANE2_X86_OBJECTS)
 else
 CPPFLAGS += -DHAVE_TANGENT_X86_ASM=0
 endif
@@ -24,7 +27,7 @@ endif
 CPPFLAGS += -I. -Ithird_party/ffmpeg -I.ffmpeg-build
 
 .PHONY: all clean test bench debug ffmpeg ffmpeg-cycles tangent-cycles \
-	lane4-experiment
+	lane2-cycles lane4-experiment
 .NOTPARALLEL: debug
 
 all: $(TARGET)
@@ -33,12 +36,15 @@ $(TARGET): $(OBJECTS) $(FFMPEG_LIB)
 	$(CC) $(LDFLAGS) -o $@ $(OBJECTS) $(FFMPEG_LIB) $(LDLIBS)
 
 fft.o: fft.c fft.h ffmpeg_fft.h tangent_x86_asm.h lane4_fft.h \
-	lane4_portable.h tangent_sse_asm.h
+	lane4_portable.h tangent_sse_asm.h lane2_sse.h
 ffmpeg_fft.o: ffmpeg_fft.c ffmpeg_fft.h fft.h third_party/ffmpeg/libavutil/tx.h
 harness.o: harness.c fft.h
 
 lane4_portable.o: lane4_portable.c lane4_portable.h \
 	lane4_portable_internal.h fft.h
+	$(CC) $(CFLAGS) $(CPPFLAGS) -fno-tree-vectorize -c -o $@ $<
+
+lane2_sse.o: lane2_sse.c lane2_sse.h fft.h
 	$(CC) $(CFLAGS) $(CPPFLAGS) -fno-tree-vectorize -c -o $@ $<
 
 lane4_fft.o: lane4_fft.c lane4_fft.h fft.h
@@ -67,6 +73,11 @@ lane4_sse_stage.o: lane4_sse_stage.asm \
 	$(NASM) -f elf64 -g -F dwarf -Ithird_party/ffmpeg/ \
 		-P.ffmpeg-build/config.asm -o $@ $<
 
+lane2_sse_stage.o: lane2_sse_stage.asm \
+	third_party/ffmpeg/libavutil/x86/x86inc.asm .ffmpeg-build/config.asm
+	$(NASM) -f elf64 -g -F dwarf -Ithird_party/ffmpeg/ \
+		-P.ffmpeg-build/config.asm -o $@ $<
+
 $(FFMPEG_LIB): scripts/build_ffmpeg.sh \
 	third_party/ffmpeg/libavutil/x86/tx_float.asm
 	NASM="$(NASM)" ./scripts/build_ffmpeg.sh
@@ -85,7 +96,14 @@ ffmpeg-cycles: analysis/ffmpeg_cycles
 tangent-cycles: analysis/tangent_cycles
 	taskset -c 2 ./analysis/tangent_cycles
 
+lane2-cycles: analysis/lane2_cycles
+	taskset -c 2 ./analysis/lane2_cycles
+
 analysis/tangent_cycles: analysis/tangent_cycles.c $(CORE_OBJECTS) $(FFMPEG_LIB)
+	$(CC) $(CFLAGS) $(CPPFLAGS) $(LDFLAGS) -o $@ $< $(CORE_OBJECTS) \
+		$(FFMPEG_LIB) $(LDLIBS)
+
+analysis/lane2_cycles: analysis/lane2_cycles.c $(CORE_OBJECTS) $(FFMPEG_LIB)
 	$(CC) $(CFLAGS) $(CPPFLAGS) $(LDFLAGS) -o $@ $< $(CORE_OBJECTS) \
 		$(FFMPEG_LIB) $(LDLIBS)
 
@@ -107,6 +125,7 @@ debug: clean $(TARGET)
 
 clean:
 	$(RM) $(TARGET) $(OBJECTS) analysis/ffmpeg_cycles \
-		analysis/tangent_cycles analysis/lane4_experiment \
+		analysis/tangent_cycles analysis/lane2_cycles \
+		analysis/lane4_experiment \
 		lane4_sse.o lane4_sse2.o \
 		lane4_sse3.o lane4_ssse3.o lane4_sse41.o lane4_sse42.o

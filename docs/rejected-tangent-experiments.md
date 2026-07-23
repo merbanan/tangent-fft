@@ -104,6 +104,41 @@ interleaved-complex butterfly. Blend/insert alternatives either require the
 same number of µops or add data movement. Independent public dispatch entries
 were retained, but their measured kernel aliases the SSE3 implementation.
 
+## Lane2 SSE follow-up
+
+### Scratch-resident FFT2 leaf
+
+The first lane2 version used an FFT2 leaf whenever the inner transform had an
+odd number of levels. It wrote every completed FFT2 to the work array and
+immediately invoked the generic radix-4 stage to form FFT8 children.
+
+This version was correct, but the extra store/load pass was measurable:
+
+| N | FFT2 leaf | fused FFT8 leaf |
+|---:|---:|---:|
+| 16 | 0.050 us | 0.040 us |
+| 64 | 0.100 us | 0.080 us |
+| 256 | 0.390 us | 0.330--0.340 us |
+| 1024 | 1.860 us | 1.590--1.620 us |
+| 4096 | 8.900 us | 7.870--7.940 us |
+
+It was replaced by a register-resident FFT8 using all sixteen XMM registers.
+The FFT2 routine itself was then removed from the assembly object.
+
+### Lane2 as a universal lane4-SSE replacement
+
+Packing two complete complex values into one XMM register reduced register
+pressure and simplified the final transpose. It did not make lane2 faster at
+every size. Lane2 performs twice as many vector-row butterflies and
+amortizes loop and coefficient work over two residue transforms rather than
+four.
+
+The final cycle harness finds lane2 ahead at 16 and 32 and effectively tied
+at 64. From 128 upward, lane4-SSE is generally faster; its advantage reaches
+about 22% at 8192. Lane2 is therefore retained as a useful small-transform
+SSE design and comparison point, not as a replacement for the lane4
+scheduler.
+
 ## Outcome
 
 The failed variants clarify the useful boundaries:
