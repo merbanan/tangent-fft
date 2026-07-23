@@ -78,6 +78,8 @@ prototype history, cycle results, limitations, and research references are in
 [`docs/lane-factorized-fft.md`](docs/lane-factorized-fft.md).
 The per-ISA organization, compiler boundaries, and comparative measurements
 are in [`docs/lane4-isa-variants.md`](docs/lane4-isa-variants.md).
+A detailed derivation, execution walkthrough, and literature lineage are in
+[`description.md`](description.md).
 
 ## Tangent implementation structure
 
