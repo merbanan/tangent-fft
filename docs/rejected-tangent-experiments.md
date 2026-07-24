@@ -104,6 +104,33 @@ interleaved-complex butterfly. Blend/insert alternatives either require the
 same number of µops or add data movement. Independent public dispatch entries
 were retained, but their measured kernel aliases the SSE3 implementation.
 
+## FFmpeg history follow-up
+
+### FMA lane4 leaves
+
+FMA versions of the lane4 AVX FFT8 base and FFT16/FFT32 leaves were tested
+after reviewing FFmpeg's FMA3 conversion. The FFT16 result changed from about
+47.4 to 53.9 cycles and FFT32 from 69.2 to 81.2 cycles on Zen 2. The FMA
+dependency latency outweighed the smaller instruction count. The FFT8 result
+was neutral/noisy, so all three variants were restored to the original
+schedule.
+
+### `imul` replacement
+
+An upper-stage integer multiply was replaced by `lea` plus a shift. Static
+throughput improved in LLVM-MCA models for Zen 2, Skylake, and Alder Lake,
+but complete FFT A/B runs moved by less than 0.5% and changed direction by
+size. The smaller original sequence was retained.
+
+### Tangent gather-load interleaving
+
+The tangent scalar gather sequence was rescheduled to issue all independent
+low-half loads before the high-half `vpinsrq` loads. N=128 occasionally
+improved, but N=16, 64, and 512 regressed and full-range runs were neutral.
+The experiment was reverted. A separate exact permutation microbenchmark
+also found `vgatherdpd` 13--117% slower than scalar loads on Zen 2, so the
+unused production gather function was removed.
+
 ## Lane2 SSE follow-up
 
 ### Scratch-resident FFT2 leaf

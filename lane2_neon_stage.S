@@ -277,13 +277,14 @@ lane2_neon_direct16_path:
         add     x13, x1, x8, lsl #2
         ldp     w9, w10, [x13]
         ldp     w11, w12, [x13, #8]
+        /* Alternate address registers to break the in-order AGU chain. */
         add     x14, x0, x9, lsl #3
+        add     x15, x0, x10, lsl #3
         ldr     q0, [x14]
-        add     x14, x0, x10, lsl #3
-        ldr     q1, [x14]
-        add     x15, x0, x11, lsl #3
-        ldr     q2, [x15]
+        ldr     q1, [x15]
+        add     x14, x0, x11, lsl #3
         add     x15, x0, x12, lsl #3
+        ldr     q2, [x14]
         ldr     q3, [x15]
 
         LANE2_RADIX4
@@ -307,22 +308,23 @@ lane2_neon_direct16_path:
         ldp     w11, w12, [x17, #8]
         ldp     w13, w14, [x17, #16]
         ldp     w15, w16, [x17, #24]
+        /* Keep two independent address/load streams live. */
         add     x17, x0, x9, lsl #3
+        add     x4, x0, x10, lsl #3
         ldr     q0, [x17]
-        add     x17, x0, x10, lsl #3
-        ldr     q1, [x17]
+        ldr     q1, [x4]
         add     x17, x0, x11, lsl #3
+        add     x4, x0, x12, lsl #3
         ldr     q2, [x17]
-        add     x17, x0, x12, lsl #3
-        ldr     q3, [x17]
+        ldr     q3, [x4]
         add     x17, x0, x13, lsl #3
+        add     x4, x0, x14, lsl #3
         ldr     q4, [x17]
-        add     x17, x0, x14, lsl #3
-        ldr     q5, [x17]
+        ldr     q5, [x4]
         add     x17, x0, x15, lsl #3
+        add     x4, x0, x16, lsl #3
         ldr     q6, [x17]
-        add     x17, x0, x16, lsl #3
-        ldr     q7, [x17]
+        ldr     q7, [x4]
 
         fadd    v16.4s, v0.4s, v1.4s
         fsub    v20.4s, v0.4s, v1.4s

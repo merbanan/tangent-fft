@@ -43,8 +43,8 @@ endif
 CPPFLAGS += -I. -Ithird_party/ffmpeg -I.ffmpeg-build
 
 .PHONY: all clean test bench debug ffmpeg ffmpeg-cycles tangent-cycles \
-	lane2-cycles lane8-profile aarch64-asm-check aarch64-qemu-test \
-	ffmpeg-aarch64-qemu-test aarch64-instruction-counts \
+	lane2-cycles lane4-cycles lane8-profile aarch64-asm-check aarch64-qemu-test \
+	gather-cycles ffmpeg-aarch64-qemu-test aarch64-instruction-counts \
 	check-aarch64-linker
 .NOTPARALLEL: debug
 
@@ -57,7 +57,8 @@ fft.o: fft.c fft.h ffmpeg_fft.h h16_hybrid.h tangent_x86_asm.h lane4_fft.h \
 	lane4_portable.h tangent_sse_asm.h lane2_sse.h lane2_neon.h
 h16_hybrid.o: h16_hybrid.c h16_hybrid.h fft.h
 ffmpeg_fft.o: ffmpeg_fft.c ffmpeg_fft.h fft.h \
-	third_party/ffmpeg/libavutil/tx.h third_party/ffmpeg/libavutil/cpu.h
+	third_party/ffmpeg/libavutil/tx.h third_party/ffmpeg/libavutil/cpu.h \
+	| $(FFMPEG_LIB)
 harness.o: harness.c fft.h
 
 lane4_portable.o: lane4_portable.c lane4_portable.h \
@@ -80,7 +81,7 @@ lane8_avx.o: lane8_avx.c lane8_avx.h lane8_avx_internal.h fft.h
 	$(CC) $(CFLAGS) $(CPPFLAGS) -fno-tree-vectorize -c -o $@ $<
 
 lane8_avx_stage.o: lane8_avx.asm \
-	third_party/ffmpeg/libavutil/x86/x86inc.asm .ffmpeg-build/config.asm
+	third_party/ffmpeg/libavutil/x86/x86inc.asm | $(FFMPEG_LIB)
 	$(NASM) -f elf64 -g -F dwarf -Ithird_party/ffmpeg/ \
 		-P.ffmpeg-build/config.asm -o $@ $<
 
@@ -112,12 +113,12 @@ tangent_sse_stage.o: tangent_sse_stage.asm
 	$(NASM) -f elf64 -g -F dwarf -o $@ $<
 
 lane4_sse_stage.o: lane4_sse_stage.asm \
-	third_party/ffmpeg/libavutil/x86/x86inc.asm .ffmpeg-build/config.asm
+	third_party/ffmpeg/libavutil/x86/x86inc.asm | $(FFMPEG_LIB)
 	$(NASM) -f elf64 -g -F dwarf -Ithird_party/ffmpeg/ \
 		-P.ffmpeg-build/config.asm -o $@ $<
 
 lane2_sse_stage.o: lane2_sse_stage.asm \
-	third_party/ffmpeg/libavutil/x86/x86inc.asm .ffmpeg-build/config.asm
+	third_party/ffmpeg/libavutil/x86/x86inc.asm | $(FFMPEG_LIB)
 	$(NASM) -f elf64 -g -F dwarf -Ithird_party/ffmpeg/ \
 		-P.ffmpeg-build/config.asm -o $@ $<
 
@@ -141,6 +142,12 @@ tangent-cycles: analysis/tangent_cycles
 
 lane2-cycles: analysis/lane2_cycles
 	taskset -c 2 ./analysis/lane2_cycles
+
+lane4-cycles: analysis/lane4_cycles
+	taskset -c 2 ./analysis/lane4_cycles
+
+gather-cycles: analysis/gather_cycles
+	taskset -c 2 ./analysis/gather_cycles
 
 aarch64-asm-check:
 	$(AARCH64_CC) -c lane2_neon_stage.S \
@@ -193,12 +200,24 @@ aarch64-instruction-counts:
 analysis/x86_tsc.o: analysis/x86_tsc.asm
 	$(NASM) -f elf64 -g -F dwarf -o $@ $<
 
+analysis/gather_cycles.o: analysis/gather_cycles.asm
+	$(NASM) -f elf64 -g -F dwarf -o $@ $<
+
+analysis/gather_cycles: analysis/gather_cycles.c analysis/gather_cycles.o \
+	analysis/x86_tsc.o
+	$(CC) $(CFLAGS) $(CPPFLAGS) $(LDFLAGS) -o $@ $^ $(LDLIBS)
+
 analysis/tangent_cycles: analysis/tangent_cycles.c analysis/x86_tsc.o \
 	$(CORE_OBJECTS) $(FFMPEG_LIB)
 	$(CC) $(CFLAGS) $(CPPFLAGS) $(LDFLAGS) -o $@ $< $(CORE_OBJECTS) \
 		analysis/x86_tsc.o $(FFMPEG_LIB) $(LDLIBS)
 
 analysis/lane2_cycles: analysis/lane2_cycles.c analysis/x86_tsc.o \
+	$(CORE_OBJECTS) $(FFMPEG_LIB)
+	$(CC) $(CFLAGS) $(CPPFLAGS) $(LDFLAGS) -o $@ $< $(CORE_OBJECTS) \
+		analysis/x86_tsc.o $(FFMPEG_LIB) $(LDLIBS)
+
+analysis/lane4_cycles: analysis/lane4_cycles.c analysis/x86_tsc.o \
 	$(CORE_OBJECTS) $(FFMPEG_LIB)
 	$(CC) $(CFLAGS) $(CPPFLAGS) $(LDFLAGS) -o $@ $< $(CORE_OBJECTS) \
 		analysis/x86_tsc.o $(FFMPEG_LIB) $(LDLIBS)
@@ -223,6 +242,8 @@ debug: clean $(TARGET)
 clean:
 	$(RM) $(TARGET) $(OBJECTS) analysis/ffmpeg_cycles \
 		analysis/tangent_cycles analysis/lane2_cycles \
+		analysis/lane4_cycles \
+		analysis/gather_cycles analysis/gather_cycles.o \
 		analysis/x86_tsc.o \
 		analysis/lane8_profile \
 		lane2_neon.o lane2_neon_stage.o \

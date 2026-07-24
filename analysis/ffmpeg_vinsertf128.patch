@@ -1,0 +1,5 @@
+--- a/third_party/ffmpeg/libavutil/x86/tx_float.asm
++++ b/third_party/ffmpeg/libavutil/x86/tx_float.asm
+@@ -244 +244 @@
+-    vperm2f128 %3, %3, %3, 0x00         ;  z2314, z2314
++    vinsertf128 %3, %3, xmm %+ regnumof%3, 1 ; z2314, z2314

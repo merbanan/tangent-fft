@@ -83,6 +83,15 @@ in its fixed split and finish paths. This does not reduce instruction count,
 but avoids imposing unnecessary load-use serialization on in-order cores and
 gives wider cores more independent operations.
 
+The FFT4/FFT8 gather leaves apply the same principle to integer address
+generation. They alternate between two address registers instead of forming
+every address and load through one dependent register. The instruction count
+and code size are unchanged. LLVM-MCA's Cortex-A53 model reduces the isolated
+lane2 load region from 3,904 to 2,704 cycles per 100 iterations and the lane4
+region from 6,304 to 5,104. Cortex-A76, Neoverse N1, and Apple M1 models are
+neutral, so the schedule is retained as an in-order improvement without a
+wide-core cost.
+
 ## Resulting instruction reductions
 
 The counts below come from QEMU's one-instruction-per-translation-block mode,
@@ -113,11 +122,33 @@ tables remain 256 bytes. Lane2 text decreased from 2,304 to 2,176 bytes.
 
 ### `FCMLA`
 
-Armv8.3 complex arithmetic can express a complex rotation more compactly,
-but it is not part of the baseline AArch64/NEON contract used by this entry.
-Using it safely requires a separately assembled implementation and runtime
-feature dispatch. Its latency and throughput also vary by core. It is a
-worthwhile native-hardware experiment, not an unconditional replacement.
+Armv8.3 complex arithmetic can express a complex rotation more compactly. The
+analysis model stores each root as `[wr,wi,wr,wi]` and uses the 0- and
+90-degree `FCMLA` forms. This halves generic radix-4 coefficient traffic from
+96 to 48 bytes and reduces modeled uops:
+
+| Core model | general uops / throughput | FCMLA | finish uops / throughput | FCMLA |
+|---|---:|---:|---:|---:|
+| Apple M1/M3 | 38 / 6.3 | 35 / 6.3 | 19 / 3.2 | 18 / 3.0 |
+| Cortex-A710/A720 | 51 / 11.5 | 46 / 11.5 | 29 / 4.5 | 26 / 4.5 |
+| Neoverse V2 | 51 / 4.8 | 46 / 4.0 | 29 / 1.8 | 26 / 1.6 |
+| AmpereOne | 37 / 9.5 | 34 / 9.5 | 17 / 4.3 | 17 / 4.3 |
+
+Throughput is in modeled cycles. `FCMLA` is not part of the baseline
+AArch64/NEON contract. A production implementation needs a second
+coefficient table and runtime `HWCAP_FCMA` dispatch, and its benefit must be
+confirmed on native hardware. The analysis regions remain in
+`analysis/lane2_neon_mca.s`; the baseline kernel is unchanged.
+
+### Grouped `ST1` stores
+
+Replacing lane4's four `STP` operations with two four-register `ST1`
+operations, and lane2's two `STP` operations with one `ST1`, passed QEMU
+correctness and reduced dynamic instruction count in base-4 paths. It did not
+have one portable performance result: LLVM-MCA favors `ST1` on Neoverse N1,
+ties on Cortex-A53/A76, and favors `STP` on Apple M1. FFmpeg's source also
+records a slight A53 advantage for `STP`. The grouped form was reverted
+pending native, per-core measurements.
 
 ### Compact roots expanded by `LD2R`
 

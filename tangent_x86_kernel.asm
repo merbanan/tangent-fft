@@ -28,22 +28,6 @@ tangent_x86_zeroupper:
     vzeroupper
     ret
 
-; rdi=input, rsi=output, rdx=uint32 permutation, rcx=count
-; Gather four complete complex-float values as four 64-bit lanes.
-global tangent_x86_permute
-tangent_x86_permute:
-    xor         rax, rax
-.permute_loop:
-    vpcmpeqd    ymm1, ymm1, ymm1
-    vmovdqu     xmm2, [rdx + rax*4]
-    vgatherdpd  ymm0, [rdi + xmm2*8], ymm1
-    vmovdqu     [rsi + rax*8], ymm0
-    add         rax, 4
-    cmp         rax, rcx
-    jb          .permute_loop
-    vzeroupper
-    ret
-
 ; rdi=data, rsi=offsets in complex samples, rdx=count
 global tangent_x86_batch_base
 tangent_x86_batch_base:

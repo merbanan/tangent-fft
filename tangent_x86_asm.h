@@ -4,10 +4,6 @@
 #include "fft.h"
 
 void tangent_x86_zeroupper(void);
-void tangent_x86_permute(const fft_complex *input,
-                         fft_complex *output,
-                         const uint32_t *permutation,
-                         size_t count);
 void tangent_x86_batch_base(fft_complex *data,
                             const uint32_t *offsets,
                             size_t count);

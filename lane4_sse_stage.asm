@@ -237,22 +237,21 @@ mangle(lane4_sse42_execute):
     movaps [%4 + 16], m1
 %endmacro
 
+; Keep the four row bases fixed and advance one shared byte offset.  This
+; removes three integer adds from each upper-stage butterfly.
 %macro LOAD_POINTER_ROWS 0
-    movaps m0, [workq]
-    movaps m1, [workq + 16]
-    movaps m2, [p1q]
-    movaps m3, [p1q + 16]
-    movaps m4, [p2q]
-    movaps m5, [p2q + 16]
-    movaps m6, [p3q]
-    movaps m7, [p3q + 16]
+    movaps m0, [workq + rowendq]
+    movaps m1, [workq + rowendq + 16]
+    movaps m2, [p1q + rowendq]
+    movaps m3, [p1q + rowendq + 16]
+    movaps m4, [p2q + rowendq]
+    movaps m5, [p2q + rowendq + 16]
+    movaps m6, [p3q + rowendq]
+    movaps m7, [p3q + rowendq + 16]
 %endmacro
 
 %macro ADVANCE_POINTER_ROWS 0
-    add workq, 32
-    add p1q, 32
-    add p2q, 32
-    add p3q, 32
+    add rowendq, 32
 %endmacro
 
 %macro STAGE_GENERAL_BUTTERFLY 0
@@ -260,7 +259,9 @@ mangle(lane4_sse42_execute):
     COMPLEX_MULTIPLY m2, m3, rootsq
     COMPLEX_MULTIPLY m4, m5, rootsq + 32
     COMPLEX_MULTIPLY m6, m7, rootsq + 64
-    RADIX4_STORE_POINTERS workq, p1q, p2q, p3q
+    RADIX4_STORE_POINTERS \
+        workq + rowendq, p1q + rowendq, \
+        p2q + rowendq, p3q + rowendq
     add rootsq, 96
     ADVANCE_POINTER_ROWS
 %endmacro
@@ -402,18 +403,19 @@ cglobal sse_stage, 4, 12, 16, work, previous, inner, root, p1, p2, p3, rowend, n
     lea p2q, [p1q + previousq]
     lea p3q, [p2q + previousq]
     lea nextq, [p3q + previousq]
-    mov rowendq, p1q
+    xor rowendq, rowendq
     mov specialq, previousq
     shr specialq, 1
-    add specialq, workq
     LOAD_POINTER_ROWS
-    RADIX4_STORE_POINTERS workq, p1q, p2q, p3q
+    RADIX4_STORE_POINTERS \
+        workq + rowendq, p1q + rowendq, \
+        p2q + rowendq, p3q + rowendq
     ADVANCE_POINTER_ROWS
     mov rootsq, rootq
 
 .before_special:
     STAGE_GENERAL_BUTTERFLY
-    cmp workq, specialq
+    cmp rowendq, specialq
     jb .before_special
 
     ; k = previous/2 has factors W8, -i, and W8^3.  FFmpeg handles
@@ -439,12 +441,14 @@ cglobal sse_stage, 4, 12, 16, work, previous, inner, root, p1, p2, p3, rowend, n
     mulps  m6, [neg_sqrt_half]
     movaps m7, m6
     movaps m6, m14
-    RADIX4_STORE_POINTERS workq, p1q, p2q, p3q
+    RADIX4_STORE_POINTERS \
+        workq + rowendq, p1q + rowendq, \
+        p2q + rowendq, p3q + rowendq
     add rootsq, 96
     ADVANCE_POINTER_ROWS
 
 .after_special:
-    cmp workq, rowendq
+    cmp rowendq, previousq
     jae .next_block
     STAGE_GENERAL_BUTTERFLY
     jmp .after_special

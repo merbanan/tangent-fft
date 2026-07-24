@@ -123,3 +123,57 @@ lane2_finish_loop:
         b.lo    lane2_finish_compact_loop
 lane2_finish_compact_loop:
 # LLVM-MCA-END
+
+// Armv8.3 FCMLA alternative.  Its coefficient stream stores one interleaved
+// [wr,wi,wr,wi] vector per radix-4 leg, halving coefficient traffic from
+// 96 to 48 bytes.  The rotated products stay in v22-v24 so the accumulator
+// zeroing does not require copies of the input rows.
+        .arch armv8.3-a
+# LLVM-MCA-BEGIN lane2-general-fcmla
+        ldr     q0, [x0]
+        ldr     q1, [x4]
+        ldr     q2, [x5]
+        ldr     q3, [x6]
+        ldp     q16, q17, [x12], #48
+        ldr     q18, [x12, #-16]
+        movi    v22.2d, #0
+        movi    v23.2d, #0
+        movi    v24.2d, #0
+        fcmla   v22.4s, v1.4s, v16.4s, #0
+        fcmla   v23.4s, v2.4s, v17.4s, #0
+        fcmla   v24.4s, v3.4s, v18.4s, #0
+        fcmla   v22.4s, v1.4s, v16.4s, #90
+        fcmla   v23.4s, v2.4s, v17.4s, #90
+        fcmla   v24.4s, v3.4s, v18.4s, #90
+        fadd    v16.4s, v0.4s, v23.4s
+        fsub    v17.4s, v0.4s, v23.4s
+        fadd    v18.4s, v22.4s, v24.4s
+        fsub    v19.4s, v22.4s, v24.4s
+        rev64   v25.4s, v19.4s
+        eor     v25.16b, v25.16b, v31.16b
+        fadd    v20.4s, v16.4s, v18.4s
+        fadd    v21.4s, v17.4s, v25.4s
+        fsub    v22.4s, v16.4s, v18.4s
+        fsub    v23.4s, v17.4s, v25.4s
+        str     q20, [x0], #16
+        str     q21, [x4], #16
+        str     q22, [x5], #16
+        str     q23, [x6], #16
+# LLVM-MCA-END
+
+# LLVM-MCA-BEGIN lane2-finish-fcmla
+        ldp     q0, q1, [x0], #32
+        trn1    v2.2d, v0.2d, v1.2d
+        trn2    v3.2d, v0.2d, v1.2d
+        ldr     q16, [x3], #16
+        movi    v18.2d, #0
+        fcmla   v18.4s, v3.4s, v16.4s, #0
+        fcmla   v18.4s, v3.4s, v16.4s, #90
+        fadd    v4.4s, v2.4s, v18.4s
+        fsub    v5.4s, v2.4s, v18.4s
+        str     q4, [x1], #16
+        str     q5, [x4], #16
+        cmp     x0, x5
+        b.lo    lane2_finish_fcmla_loop
+lane2_finish_fcmla_loop:
+# LLVM-MCA-END

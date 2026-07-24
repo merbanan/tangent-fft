@@ -418,14 +418,15 @@ lane4_neon_execute:
 .Llane4_base4_loop:
         ldp     w9, w10, [x1], #8
         ldp     w11, w12, [x1], #8
+        /* Alternate address registers to break the in-order AGU chain. */
         add     x13, x0, x9, lsl #3
+        add     x14, x0, x10, lsl #3
         ld2     { v0.4s, v1.4s }, [x13]
-        add     x13, x0, x10, lsl #3
-        ld2     { v2.4s, v3.4s }, [x13]
+        ld2     { v2.4s, v3.4s }, [x14]
         add     x13, x0, x11, lsl #3
+        add     x14, x0, x12, lsl #3
         ld2     { v4.4s, v5.4s }, [x13]
-        add     x13, x0, x12, lsl #3
-        ld2     { v6.4s, v7.4s }, [x13]
+        ld2     { v6.4s, v7.4s }, [x14]
         LANE4_RADIX4_SOA \
                 v0, v1, v2, v3, v4, v5, v6, v7, \
                 v0, v1, v2, v3, v4, v5, v6, v7, \
@@ -449,22 +450,23 @@ lane4_neon_execute:
         ldp     w11, w12, [x1], #8
         ldp     w13, w14, [x1], #8
         ldp     w15, w16, [x1], #8
+        /* Keep two independent address/load streams live. */
         add     x17, x0, x9, lsl #3
+        add     x4, x0, x10, lsl #3
         ld2     { v0.4s, v1.4s }, [x17]
-        add     x17, x0, x10, lsl #3
-        ld2     { v2.4s, v3.4s }, [x17]
+        ld2     { v2.4s, v3.4s }, [x4]
         add     x17, x0, x11, lsl #3
+        add     x4, x0, x12, lsl #3
         ld2     { v4.4s, v5.4s }, [x17]
-        add     x17, x0, x12, lsl #3
-        ld2     { v6.4s, v7.4s }, [x17]
+        ld2     { v6.4s, v7.4s }, [x4]
         add     x17, x0, x13, lsl #3
+        add     x4, x0, x14, lsl #3
         ld2     { v8.4s, v9.4s }, [x17]
-        add     x17, x0, x14, lsl #3
-        ld2     { v10.4s, v11.4s }, [x17]
+        ld2     { v10.4s, v11.4s }, [x4]
         add     x17, x0, x15, lsl #3
+        add     x4, x0, x16, lsl #3
         ld2     { v12.4s, v13.4s }, [x17]
-        add     x17, x0, x16, lsl #3
-        ld2     { v14.4s, v15.4s }, [x17]
+        ld2     { v14.4s, v15.4s }, [x4]
 
         fadd    v16.4s, v0.4s, v2.4s
         fadd    v17.4s, v1.4s, v3.4s

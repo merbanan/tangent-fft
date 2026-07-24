@@ -1,0 +1,32 @@
+Correctness tests (long-double direct DFT reference)
+PASS: forward/inverse direct DFT through 512; cross-checks through 2^22
+  radix-2                  worst error: forward 3.238e-07, inverse 9.074e-08
+  split-radix              worst error: forward 1.688e-07, inverse 3.017e-08
+  tangent                  worst error: forward 1.795e-07, inverse 6.147e-08
+  tangent-x86-asm          worst error: forward 1.413e-07, inverse 6.146e-08
+  tangent-sse              worst error: forward 1.795e-07, inverse 6.147e-08
+  tangent-sse2             worst error: forward 1.795e-07, inverse 6.147e-08
+  tangent-sse3             worst error: forward 1.795e-07, inverse 6.147e-08
+  tangent-ssse3            worst error: forward 1.795e-07, inverse 6.147e-08
+  tangent-sse4.1           worst error: forward 1.795e-07, inverse 6.147e-08
+  tangent-sse4.2           worst error: forward 1.795e-07, inverse 6.147e-08
+  lane4-c                  worst error: forward 3.516e-07, inverse 1.077e-07
+  lane4-sse                worst error: forward 3.238e-07, inverse 1.115e-07
+  lane4-sse2               worst error: forward 3.238e-07, inverse 1.115e-07
+  lane4-sse3               worst error: forward 3.238e-07, inverse 1.115e-07
+  lane4-ssse3              worst error: forward 3.238e-07, inverse 1.115e-07
+  lane4-sse4.1             worst error: forward 3.238e-07, inverse 1.115e-07
+  lane4-sse4.2             worst error: forward 3.238e-07, inverse 1.115e-07
+  lane4-avx                worst error: forward 3.238e-07, inverse 1.115e-07
+  lane4-avx-fma            worst error: forward 3.238e-07, inverse 1.049e-07
+  lane4-avx2               worst error: forward 3.238e-07, inverse 1.115e-07
+  lane4-avx2-fma           worst error: forward 3.238e-07, inverse 1.049e-07
+  lane2-sse                worst error: forward 3.238e-07, inverse 1.059e-07
+  ffmpeg-avtx              worst error: forward 1.371e-07, inverse 2.245e-08
+  lane8-avx2-fma           worst error: forward 2.797e-07, inverse 8.459e-08
+  hw-sse-auto              worst error: forward 3.238e-07, inverse 1.115e-07
+  ffmpeg-sse               worst error: forward 1.694e-07, inverse 2.774e-08
+  scaled-h16-hybrid        worst error: forward 1.688e-07, inverse 3.017e-08
+  scaled-h16-paired-avx2   worst error: forward 1.688e-07, inverse 3.017e-08
+  lane2-neon               worst error: forward 0.000e+00, inverse 0.000e+00
+  lane4-neon-fused         worst error: forward 0.000e+00, inverse 0.000e+00

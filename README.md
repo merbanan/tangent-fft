@@ -53,6 +53,8 @@ make bench
 make ffmpeg-cycles
 make tangent-cycles
 make lane2-cycles
+make lane4-cycles
+make gather-cycles
 make lane8-profile
 make aarch64-asm-check
 make aarch64-qemu-test
@@ -107,6 +109,13 @@ comparison with FFmpeg NEON and LLVM-MCA estimates are in
 The complete audit of the vendored FFmpeg ARM/AArch64 sources, applied
 optimizations, instruction deltas, and rejected alternatives is in
 [`docs/arm-optimization-audit.md`](docs/arm-optimization-audit.md).
+The follow-up through FFmpeg's SIMD history, including isolated x86 cycle
+tests, ARM scheduling models, code-size deltas, and every retained/rejected
+decision, is in
+[`docs/ffmpeg-history-optimization-audit.md`](docs/ffmpeg-history-optimization-audit.md).
+Repeated measurements on a loaded Intel Skylake i7-6500U, including all raw
+passes and variance summaries, are in
+[`results/intel-i7-6500u/README.md`](results/intel-i7-6500u/README.md).
 
 The fused lane4-SoA layout, Stockham destination writes, and the NEON/SSE/AVX
 16/32/64 leaf families are described in
