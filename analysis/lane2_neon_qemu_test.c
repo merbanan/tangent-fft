@@ -1,5 +1,5 @@
 /*
- * Freestanding AArch64 correctness runner for lane2-neon.
+ * Freestanding AArch64 correctness runner for lane2-neon and lane4-neon.
  *
  * This deliberately supplies only the tiny allocator, trigonometric
  * functions, and Linux syscalls needed to exercise the production planner
@@ -324,7 +324,7 @@ void _start(void)
     static const char pass_message[] =
         "PASS: lane2-neon and fused lane4-neon, N=16..8192\n";
     static const char fail_message[] =
-        "FAIL: lane2-neon production planner/assembly\n";
+        "FAIL: lane2-neon or fused lane4-neon planner/assembly\n";
     size_t n;
 
     if (TEST_LANE2) {

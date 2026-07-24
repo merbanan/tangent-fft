@@ -119,12 +119,20 @@ normalization:
 |---|---:|---:|
 | vector ALU/shuffle operations | 76 | 72 |
 | Q-register loads and stores | 56 | 36 |
-| source-level instructions including addressing | 140 | about 93 |
+| source-level instructions including addressing | 120 | about 93 |
 
 The FFmpeg count comes from the active
 `libavutil/aarch64/tx_float_neon.S` macro plus its surrounding paired
 loads/stores.  It is not a cycle prediction, but it exposes lane2's larger
 coefficient stream.
+
+The reduction from 140 to 120 instructions comes from the wider ARM audit:
+four post-index output stores replace four stores plus four pointer additions,
+and the coefficient packet advance is folded into its first paired load.
+LLVM-MCA's backend-bound reciprocal throughput is unchanged, but dynamic
+execution falls by 24,918 instructions (10.4%) at N=8192. Full before/after
+counts and the audit are in
+[`arm-optimization-audit.md`](arm-optimization-audit.md).
 
 ## Compact-root experiment
 

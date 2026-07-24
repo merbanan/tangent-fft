@@ -1,5 +1,5 @@
 /*
- * Freestanding correctness runner for FFmpeg's AArch64 split-radix kernel.
+ * Freestanding correctness runner for FFmpeg's AArch64 FFT kernels.
  *
  * This supplies the cosine tables and split-radix gather map normally built
  * by libavutil, allowing the exact assembly object to run under qemu-aarch64
@@ -10,7 +10,7 @@
 #include <stdint.h>
 
 #ifndef TEST_MIN_N
-#define TEST_MIN_N 64
+#define TEST_MIN_N 16
 #endif
 #ifndef TEST_MAX_N
 #define TEST_MAX_N 256
@@ -63,6 +63,22 @@ void ff_tx_fft_sr_float_neon(test_avtx_context *context,
                              void *output,
                              void *input,
                              ptrdiff_t stride);
+void ff_tx_fft16_ns_float_neon(test_avtx_context *context,
+                              void *output,
+                              void *input,
+                              ptrdiff_t stride);
+void ff_tx_fft16_float_neon(test_avtx_context *context,
+                           void *output,
+                           void *input,
+                           ptrdiff_t stride);
+void ff_tx_fft32_ns_float_neon(test_avtx_context *context,
+                              void *output,
+                              void *input,
+                              ptrdiff_t stride);
+void ff_tx_fft32_float_neon(test_avtx_context *context,
+                           void *output,
+                           void *input,
+                           ptrdiff_t stride);
 
 static _Alignas(64) test_complex input[TEST_MAX_N];
 static _Alignas(64) test_complex permuted[TEST_MAX_N];
@@ -304,7 +320,19 @@ static int check_size(int n)
     context.len = n;
     context.inv = 0;
     context.map = split_radix_map;
-    if (TEST_FFMPEG_NATURAL) {
+    if (n == 16) {
+        if (TEST_FFMPEG_NATURAL) {
+            ff_tx_fft16_float_neon(&context, output, input, 8);
+        } else {
+            ff_tx_fft16_ns_float_neon(&context, output, permuted, 8);
+        }
+    } else if (n == 32) {
+        if (TEST_FFMPEG_NATURAL) {
+            ff_tx_fft32_float_neon(&context, output, input, 8);
+        } else {
+            ff_tx_fft32_ns_float_neon(&context, output, permuted, 8);
+        }
+    } else if (TEST_FFMPEG_NATURAL) {
         ff_tx_fft_sr_float_neon(&context, output, input, 8);
     } else {
         ff_tx_fft_sr_ns_float_neon(&context, output, permuted, 8);
@@ -363,9 +391,9 @@ static void linux_exit(int status)
 void _start(void)
 {
     static const char pass_message[] =
-        "PASS: FFmpeg NEON split-radix assembly, N=64..256\n";
+        "PASS: FFmpeg NEON FFT assembly\n";
     static const char fail_message[] =
-        "FAIL: FFmpeg NEON split-radix assembly\n";
+        "FAIL: FFmpeg NEON FFT assembly\n";
     int n;
 
     for (n = TEST_MIN_N; n <= TEST_MAX_N; n *= 2) {

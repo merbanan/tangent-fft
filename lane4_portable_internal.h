@@ -26,6 +26,7 @@ struct lane4_portable_plan {
     float *finish_re;
     float *finish_im;
     lane4_portable_row *work;
+    lane4_replicated_root *finish_root;
 };
 
 #endif

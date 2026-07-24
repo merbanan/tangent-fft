@@ -40,6 +40,21 @@ and fuses each upper twiddle/combine with its Stockham destination write.
 register-level N=16 arithmetic network itself is the classical split-radix
 recurrence.
 
+## AArch64 execution layout
+
+The NEON implementation stores each four-frequency real/imaginary coefficient
+pair adjacently and orders the three pairs exactly as the fused finish
+consumes them. Three post-index `LDP Q` operations therefore load an entire
+root packet without indexed address construction.
+
+The 4x4 transpose deliberately exposes the native destination order produced
+by its eight `TRN1`/`TRN2` instructions. Radix and store consumers use those
+registers directly instead of normalizing them with copies. The FFT8 gather
+leaf likewise loads eight permutation indices as four pairs.
+
+These choices came from the complete FFmpeg ARM/AArch64 audit in
+[`arm-optimization-audit.md`](arm-optimization-audit.md).
+
 ## Architecture implementations
 
 | Architecture entry | N=16 | N=32 | N=64 |
@@ -104,8 +119,9 @@ algorithmic speedup.
 ## Correctness
 
 `make aarch64-qemu-test` runs the production NEON planner and assembly in a
-freestanding AArch64 binary. It checks the fused lane4 leaves at N=16, 32, and
-64 against a double-precision reference FFT.
+freestanding AArch64 binary. It checks the complete fused lane4 path at every
+power of two from N=16 through N=8192 against a double-precision reference
+FFT.
 
 `make test` checks every available x86 SIMD entry against a long-double direct
 DFT through N=512 and cross-checks power-of-two sizes through `2^22`.

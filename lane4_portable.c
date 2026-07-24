@@ -21,6 +21,8 @@ _Static_assert(offsetof(lane4_portable_plan, finish_im) == 64,
                "update lane4 assembly plan offsets");
 _Static_assert(offsetof(lane4_portable_plan, work) == 72,
                "update lane4 assembly plan offsets");
+_Static_assert(offsetof(lane4_portable_plan, finish_root) == 80,
+               "update lane4 assembly plan offsets");
 #endif
 
 static size_t round_up(size_t value, size_t alignment)
@@ -110,12 +112,21 @@ lane4_portable_plan *lane4_portable_plan_create(size_t n)
     plan->work = (lane4_portable_row *)aligned_alloc(
         64,
         round_up(plan->inner_size * sizeof(*plan->work), 64));
+#if HAVE_TANGENT_AARCH64_ASM
+    plan->finish_root = (lane4_replicated_root *)aligned_alloc(
+        64,
+        round_up(3 * (plan->inner_size / 4) *
+                 sizeof(*plan->finish_root), 64));
+#endif
 
     if (plan->permutation == NULL ||
         plan->mixed_permutation == NULL ||
         plan->root == NULL ||
         plan->replicated_root == NULL ||
         plan->finish_re == NULL || plan->finish_im == NULL ||
+#if HAVE_TANGENT_AARCH64_ASM
+        plan->finish_root == NULL ||
+#endif
         plan->work == NULL) {
         lane4_portable_plan_destroy(plan);
         return NULL;
@@ -182,6 +193,36 @@ lane4_portable_plan *lane4_portable_plan_create(size_t n)
             }
         }
     }
+#if HAVE_TANGENT_AARCH64_ASM
+    {
+        size_t group;
+
+        /*
+         * NEON consumes one four-frequency real/imaginary pair for each
+         * nonzero radix-4 leg.  Keep the three pairs for a group adjacent,
+         * matching AArch64 LDP post-increment addressing and avoiding six
+         * independent coefficient streams in the finish loop.
+         */
+        for (group = 0; group < plan->inner_size / 4; ++group) {
+            unsigned multiple;
+
+            for (multiple = 1; multiple <= 3; ++multiple) {
+                lane4_replicated_root *destination =
+                    plan->finish_root + 3 * group + (multiple - 1);
+                unsigned lane;
+
+                for (lane = 0; lane < 4; ++lane) {
+                    const size_t frequency = 4 * group + lane;
+                    const float angle =
+                        -2.0f * LANE4_PI *
+                        (float)(multiple * frequency) / (float)n;
+                    destination->re[lane] = cosf(angle);
+                    destination->im[lane] = sinf(angle);
+                }
+            }
+        }
+    }
+#endif
 
     return plan;
 }
@@ -198,6 +239,7 @@ void lane4_portable_plan_destroy(lane4_portable_plan *plan)
     free(plan->finish_re);
     free(plan->finish_im);
     free(plan->work);
+    free(plan->finish_root);
     free(plan);
 }
 

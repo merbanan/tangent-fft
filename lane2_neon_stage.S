@@ -64,17 +64,10 @@
         .endm
 
         .macro  LANE2_STORE_ROWS
-        str     q20, [x0]
-        str     q21, [x4]
-        str     q22, [x5]
-        str     q23, [x6]
-        .endm
-
-        .macro  LANE2_ADVANCE_ROWS
-        add     x0, x0, #16
-        add     x4, x4, #16
-        add     x5, x5, #16
-        add     x6, x6, #16
+        str     q20, [x0], #16
+        str     q21, [x4], #16
+        str     q22, [x5], #16
+        str     q23, [x6], #16
         .endm
 
 /*
@@ -84,9 +77,9 @@
  */
         .macro  LANE2_GENERAL_BUTTERFLY
         LANE2_LOAD_ROWS
-        ldp     q16, q17, [x12]
-        ldp     q18, q19, [x12, #32]
-        ldp     q20, q21, [x12, #64]
+        ldp     q16, q17, [x12], #96
+        ldp     q18, q19, [x12, #-64]
+        ldp     q20, q21, [x12, #-32]
         rev64   v22.4s, v1.4s
         rev64   v23.4s, v2.4s
         rev64   v24.4s, v3.4s
@@ -98,8 +91,6 @@
         fmla    v3.4s, v24.4s, v21.4s
         LANE2_RADIX4
         LANE2_STORE_ROWS
-        add     x12, x12, #96
-        LANE2_ADVANCE_ROWS
         .endm
 
         .p2align 6
@@ -408,7 +399,6 @@ lane2_neon_direct16_path:
         LANE2_LOAD_ROWS
         LANE2_RADIX4
         LANE2_STORE_ROWS
-        LANE2_ADVANCE_ROWS
         mov     x12, x3
 
         LANE2_GENERAL_BUTTERFLY
@@ -433,7 +423,6 @@ lane2_neon_direct16_path:
         LANE2_RADIX4
         LANE2_STORE_ROWS
         add     x12, x12, #96
-        LANE2_ADVANCE_ROWS
 
         LANE2_GENERAL_BUTTERFLY
 
@@ -472,5 +461,15 @@ lane2_neon_direct16_path:
         cmp     x0, x5
         b.lo    .Lfinish_loop
         ret
+
+        /*
+         * Marker used by the instruction-trace harness.  The public symbol
+         * ends before the private leaves, so its ordinary ELF size alone
+         * does not cover all dynamically executed lane2 code.
+         */
+        .hidden lane2_neon_code_end
+        .type   lane2_neon_code_end, %function
+lane2_neon_code_end:
+        .size   lane2_neon_code_end, .-lane2_neon_code_end
 
         .section .note.GNU-stack,"",%progbits

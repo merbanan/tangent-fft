@@ -104,6 +104,9 @@ The AArch64 `lane2-neon` port uses the same factorization with NEON `REV64`,
 private stages and has a freestanding QEMU correctness target. The code-level
 comparison with FFmpeg NEON and LLVM-MCA estimates are in
 [`docs/lane2-neon.md`](docs/lane2-neon.md).
+The complete audit of the vendored FFmpeg ARM/AArch64 sources, applied
+optimizations, instruction deltas, and rejected alternatives is in
+[`docs/arm-optimization-audit.md`](docs/arm-optimization-audit.md).
 
 The fused lane4-SoA layout, Stockham destination writes, and the NEON/SSE/AVX
 16/32/64 leaf families are described in

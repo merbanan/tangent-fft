@@ -12,9 +12,9 @@
         ldr     q1, [x4]
         ldr     q2, [x5]
         ldr     q3, [x6]
-        ldp     q16, q17, [x12]
-        ldp     q18, q19, [x12, #32]
-        ldp     q20, q21, [x12, #64]
+        ldp     q16, q17, [x12], #96
+        ldp     q18, q19, [x12, #-64]
+        ldp     q20, q21, [x12, #-32]
         rev64   v22.4s, v1.4s
         rev64   v23.4s, v2.4s
         rev64   v24.4s, v3.4s
@@ -34,15 +34,10 @@
         fadd    v21.4s, v17.4s, v24.4s
         fsub    v22.4s, v16.4s, v18.4s
         fsub    v23.4s, v17.4s, v24.4s
-        str     q20, [x0]
-        str     q21, [x4]
-        str     q22, [x5]
-        str     q23, [x6]
-        add     x12, x12, #96
-        add     x0, x0, #16
-        add     x4, x4, #16
-        add     x5, x5, #16
-        add     x6, x6, #16
+        str     q20, [x0], #16
+        str     q21, [x4], #16
+        str     q22, [x5], #16
+        str     q23, [x6], #16
 # LLVM-MCA-END
 
 // Two adjacent frequencies of the fused lane2 finish.  It consumes and

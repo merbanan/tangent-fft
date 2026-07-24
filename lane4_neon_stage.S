@@ -15,39 +15,38 @@
 #define PLAN_FINISH_RE 56
 #define PLAN_FINISH_IM 64
 #define PLAN_WORK      72
+#define PLAN_FINISH_ROOT 80
 
         .section .rodata
         .p2align 4
-.Llane4_fft16_re:
+.Llane4_fft16_root:
         .float  1.0,  0.9238795042037963867
         .float  0.7071067811865475244,  0.3826834323650897717
-        .float  1.0,  0.7071067811865475244
-        .float  0.0, -0.7071067811865475244
-        .float  1.0,  0.3826834323650897717
-        .float -0.7071067811865475244, -0.9238795042037963867
-.Llane4_fft16_im:
         .float  0.0, -0.3826834323650897717
         .float -0.7071067811865475244, -0.9238795042037963867
+        .float  1.0,  0.7071067811865475244
+        .float  0.0, -0.7071067811865475244
         .float  0.0, -0.7071067811865475244
         .float -1.0, -0.7071067811865475244
+        .float  1.0,  0.3826834323650897717
+        .float -0.7071067811865475244, -0.9238795042037963867
         .float  0.0, -0.9238795042037963867
         .float -0.7071067811865475244,  0.3826834323650897717
-.Llane4_fft32_re:
+.Llane4_fft32_root:
         .float  1.0,  0.9807852804032304491
         .float  0.9238795325112867561,  0.8314696123025452371
+        .float  0.0, -0.1950903220161282678
+        .float -0.3826834323650897717, -0.5555702330196022247
         .float  0.7071067811865475244,  0.5555702330196022247
         .float  0.3826834323650897717,  0.1950903220161282678
-        .float  0.0, -0.1950903220161282678
-        .float -0.3826834323650897717, -0.5555702330196022247
         .float -0.7071067811865475244, -0.8314696123025452371
         .float -0.9238795325112867561, -0.9807852804032304491
-.Llane4_fft32_im:
         .float  0.0, -0.1950903220161282678
         .float -0.3826834323650897717, -0.5555702330196022247
-        .float -0.7071067811865475244, -0.8314696123025452371
-        .float -0.9238795325112867561, -0.9807852804032304491
         .float -1.0, -0.9807852804032304491
         .float -0.9238795325112867561, -0.8314696123025452371
+        .float -0.7071067811865475244, -0.8314696123025452371
+        .float -0.9238795325112867561, -0.9807852804032304491
         .float -0.7071067811865475244, -0.5555702330196022247
         .float -0.3826834323650897717, -0.1950903220161282678
 .Llane4_sqrt_half:
@@ -89,7 +88,9 @@
         .endm
 
 /*
- * Transpose four 4-float rows.  The first four arguments are destroyed.
+ * Transpose four 4-float rows without normalizing the output registers.
+ * The columns are returned in r2, c2, r3, c3.  Consuming that native TRN
+ * order saves three register copies at every transpose.
  */
         .macro  LANE4_TRANSPOSE4 r0, r1, r2, r3, c0, c1, c2, c3
         trn1    \c0\().4s, \r0\().4s, \r1\().4s
@@ -100,9 +101,6 @@
         trn2    \r3\().2d, \c0\().2d, \r0\().2d
         trn1    \c2\().2d, \c1\().2d, \r1\().2d
         trn2    \c3\().2d, \c1\().2d, \r1\().2d
-        mov     \c0\().16b, \r2\().16b
-        mov     \c1\().16b, \c2\().16b
-        mov     \c2\().16b, \r3\().16b
         .endm
 
         .p2align 6
@@ -122,8 +120,8 @@ lane4_neon_execute:
         b       .Llane4_error
 
 .Llane4_size16:
-        ldr     x2, [x0, #PLAN_FINISH_RE]
-        ldr     x3, [x0, #PLAN_FINISH_IM]
+        ldr     x2, [x0, #PLAN_FINISH_ROOT]
+        mov     w0, wzr
 .Llane4_fft16_core:
         mov     x9, x1
 
@@ -137,29 +135,33 @@ lane4_neon_execute:
                 v0, v1, v2, v3, v4, v5, v6, v7, \
                 v16, v17, v18, v19, v20, v21, v22, v23
 
+        /*
+         * FFmpeg's ARM kernels load independent coefficient vectors as one
+         * batch before their consumers.  Keep all three pairs live here so
+         * in-order cores can overlap the loads and wide cores can issue the
+         * three products independently.
+         */
+        ldp     q24, q25, [x2], #32
+        ldp     q26, q27, [x2], #32
+        ldp     q28, q29, [x2]
+
         /* Y1 *= W16^k. */
-        ldr     q24, [x2], #16
-        ldr     q25, [x3], #16
         fmul    v16.4s, v2.4s, v24.4s
         fmul    v17.4s, v3.4s, v24.4s
         fmls    v16.4s, v3.4s, v25.4s
         fmla    v17.4s, v2.4s, v25.4s
 
         /* Y2 *= W16^(2k). */
-        ldr     q24, [x2], #16
-        ldr     q25, [x3], #16
-        fmul    v18.4s, v4.4s, v24.4s
-        fmul    v19.4s, v5.4s, v24.4s
-        fmls    v18.4s, v5.4s, v25.4s
-        fmla    v19.4s, v4.4s, v25.4s
+        fmul    v18.4s, v4.4s, v26.4s
+        fmul    v19.4s, v5.4s, v26.4s
+        fmls    v18.4s, v5.4s, v27.4s
+        fmla    v19.4s, v4.4s, v27.4s
 
         /* Y3 *= W16^(3k). */
-        ldr     q24, [x2]
-        ldr     q25, [x3]
-        fmul    v20.4s, v6.4s, v24.4s
-        fmul    v21.4s, v7.4s, v24.4s
-        fmls    v20.4s, v7.4s, v25.4s
-        fmla    v21.4s, v6.4s, v25.4s
+        fmul    v20.4s, v6.4s, v28.4s
+        fmul    v21.4s, v7.4s, v28.4s
+        fmls    v20.4s, v7.4s, v29.4s
+        fmla    v21.4s, v6.4s, v29.4s
 
         /*
          * Rows are [X_l(0), X_l(1), X_l(2), X_l(3)].  Transpose them so
@@ -170,7 +172,7 @@ lane4_neon_execute:
         LANE4_TRANSPOSE4 v1, v17, v19, v21, v26, v27, v28, v29
 
         LANE4_RADIX4_SOA \
-                v22, v26, v23, v27, v24, v28, v25, v29, \
+                v18, v19, v24, v28, v20, v21, v25, v29, \
                 v16, v17, v18, v19, v20, v21, v22, v23, \
                 v0, v1, v2, v3, v4, v5, v6, v7
 
@@ -178,7 +180,6 @@ lane4_neon_execute:
         st2     { v18.4s, v19.4s }, [x9], #32
         st2     { v20.4s, v21.4s }, [x9], #32
         st2     { v22.4s, v23.4s }, [x9]
-        mov     w0, wzr
         ret
 
 .Llane4_size32:
@@ -187,19 +188,15 @@ lane4_neon_execute:
          * The two FFT16 leaves are shared with N=16/N=64.  ZIP performs the
          * final Stockham autosort directly into natural AoS output.
          */
-        stp     x19, x20, [sp, #-48]!
-        stp     x21, x22, [sp, #16]
-        str     x30, [sp, #32]
-        ldr     x19, [x0, #PLAN_WORK]
-        mov     x22, x1
-        adrp    x2, .Llane4_fft32_re
-        add     x2, x2, :lo12:.Llane4_fft32_re
-        adrp    x3, .Llane4_fft32_im
-        add     x3, x3, :lo12:.Llane4_fft32_im
+        str     x30, [sp, #-16]!
+        ldr     x15, [x0, #PLAN_WORK]
+        mov     x17, x1
+        adrp    x2, .Llane4_fft32_root
+        add     x2, x2, :lo12:.Llane4_fft32_root
         mov     x5, x1
         add     x6, x1, #128
-        mov     x10, x19
-        add     x11, x19, #128
+        mov     x10, x15
+        add     x11, x15, #128
         mov     w14, #4
 
 .Llane4_size32_split:
@@ -210,8 +207,7 @@ lane4_neon_execute:
         fsub    v6.4s, v0.4s, v2.4s
         fsub    v7.4s, v1.4s, v3.4s
         st2     { v4.4s, v5.4s }, [x10], #32
-        ldr     q24, [x2], #16
-        ldr     q25, [x3], #16
+        ldp     q24, q25, [x2], #32
         fmul    v26.4s, v6.4s, v24.4s
         fmul    v27.4s, v7.4s, v24.4s
         fmls    v26.4s, v7.4s, v25.4s
@@ -220,22 +216,18 @@ lane4_neon_execute:
         subs    w14, w14, #1
         b.ne    .Llane4_size32_split
 
-        adrp    x20, .Llane4_fft16_re
-        add     x20, x20, :lo12:.Llane4_fft16_re
-        adrp    x21, .Llane4_fft16_im
-        add     x21, x21, :lo12:.Llane4_fft16_im
-        mov     x1, x19
-        mov     x2, x20
-        mov     x3, x21
+        adrp    x16, .Llane4_fft16_root
+        add     x16, x16, :lo12:.Llane4_fft16_root
+        mov     x1, x15
+        mov     x2, x16
         bl      .Llane4_fft16_core
-        add     x1, x19, #128
-        mov     x2, x20
-        mov     x3, x21
+        add     x1, x15, #128
+        mov     x2, x16
         bl      .Llane4_fft16_core
 
-        mov     x4, x19
-        add     x5, x19, #128
-        mov     x9, x22
+        mov     x4, x15
+        add     x5, x15, #128
+        mov     x9, x17
         mov     w10, #4
 
 .Llane4_size32_autosort:
@@ -250,9 +242,7 @@ lane4_neon_execute:
         subs    w10, w10, #1
         b.ne    .Llane4_size32_autosort
 
-        ldr     x30, [sp, #32]
-        ldp     x21, x22, [sp, #16]
-        ldp     x19, x20, [sp], #48
+        ldr     x30, [sp], #16
         mov     w0, wzr
         ret
 
@@ -263,22 +253,19 @@ lane4_neon_execute:
          * leaves consume them, and the final 4x4 transposes perform the
          * Stockham autosort while writing natural-order output.
          */
-        stp     x19, x20, [sp, #-48]!
-        stp     x21, x22, [sp, #16]
-        str     x30, [sp, #32]
-        ldr     x19, [x0, #PLAN_WORK]
-        mov     x22, x1
-        ldr     x2, [x0, #PLAN_FINISH_RE]
-        ldr     x3, [x0, #PLAN_FINISH_IM]
+        str     x30, [sp, #-16]!
+        ldr     x15, [x0, #PLAN_WORK]
+        mov     x17, x1
+        ldr     x2, [x0, #PLAN_FINISH_ROOT]
 
         mov     x5, x1
         add     x6, x1, #128
         add     x7, x1, #256
         add     x8, x1, #384
-        mov     x10, x19
-        add     x11, x19, #128
-        add     x12, x19, #256
-        add     x13, x19, #384
+        mov     x10, x15
+        add     x11, x15, #128
+        add     x12, x15, #256
+        add     x13, x15, #384
         mov     w14, #4
 
 .Llane4_size64_split:
@@ -292,64 +279,53 @@ lane4_neon_execute:
                 v0, v1, v2, v3, v4, v5, v6, v7, \
                 v16, v17, v18, v19, v20, v21, v22, v23
 
+        ldp     q24, q25, [x2], #32
+        ldp     q26, q27, [x2], #32
+        ldp     q28, q29, [x2], #32
         st2     { v0.4s, v1.4s }, [x10], #32
 
-        ldr     q24, [x2]
-        ldr     q25, [x3]
-        fmul    v26.4s, v2.4s, v24.4s
-        fmul    v27.4s, v3.4s, v24.4s
-        fmls    v26.4s, v3.4s, v25.4s
-        fmla    v27.4s, v2.4s, v25.4s
-        st2     { v26.4s, v27.4s }, [x11], #32
+        fmul    v16.4s, v2.4s, v24.4s
+        fmul    v17.4s, v3.4s, v24.4s
+        fmls    v16.4s, v3.4s, v25.4s
+        fmla    v17.4s, v2.4s, v25.4s
+        st2     { v16.4s, v17.4s }, [x11], #32
 
-        ldr     q24, [x2, #64]
-        ldr     q25, [x3, #64]
-        fmul    v28.4s, v4.4s, v24.4s
-        fmul    v29.4s, v5.4s, v24.4s
-        fmls    v28.4s, v5.4s, v25.4s
-        fmla    v29.4s, v4.4s, v25.4s
-        st2     { v28.4s, v29.4s }, [x12], #32
+        fmul    v18.4s, v4.4s, v26.4s
+        fmul    v19.4s, v5.4s, v26.4s
+        fmls    v18.4s, v5.4s, v27.4s
+        fmla    v19.4s, v4.4s, v27.4s
+        st2     { v18.4s, v19.4s }, [x12], #32
 
-        ldr     q24, [x2, #128]
-        ldr     q25, [x3, #128]
-        fmul    v30.4s, v6.4s, v24.4s
-        fmul    v31.4s, v7.4s, v24.4s
-        fmls    v30.4s, v7.4s, v25.4s
-        fmla    v31.4s, v6.4s, v25.4s
-        st2     { v30.4s, v31.4s }, [x13], #32
+        fmul    v20.4s, v6.4s, v28.4s
+        fmul    v21.4s, v7.4s, v28.4s
+        fmls    v20.4s, v7.4s, v29.4s
+        fmla    v21.4s, v6.4s, v29.4s
+        st2     { v20.4s, v21.4s }, [x13], #32
 
-        add     x2, x2, #16
-        add     x3, x3, #16
         subs    w14, w14, #1
         b.ne    .Llane4_size64_split
 
-        adrp    x20, .Llane4_fft16_re
-        add     x20, x20, :lo12:.Llane4_fft16_re
-        adrp    x21, .Llane4_fft16_im
-        add     x21, x21, :lo12:.Llane4_fft16_im
+        adrp    x16, .Llane4_fft16_root
+        add     x16, x16, :lo12:.Llane4_fft16_root
 
-        mov     x1, x19
-        mov     x2, x20
-        mov     x3, x21
+        mov     x1, x15
+        mov     x2, x16
         bl      .Llane4_fft16_core
-        add     x1, x19, #128
-        mov     x2, x20
-        mov     x3, x21
+        add     x1, x15, #128
+        mov     x2, x16
         bl      .Llane4_fft16_core
-        add     x1, x19, #256
-        mov     x2, x20
-        mov     x3, x21
+        add     x1, x15, #256
+        mov     x2, x16
         bl      .Llane4_fft16_core
-        add     x1, x19, #384
-        mov     x2, x20
-        mov     x3, x21
+        add     x1, x15, #384
+        mov     x2, x16
         bl      .Llane4_fft16_core
 
-        mov     x4, x19
-        add     x5, x19, #128
-        add     x6, x19, #256
-        add     x7, x19, #384
-        mov     x9, x22
+        mov     x4, x15
+        add     x5, x15, #128
+        add     x6, x15, #256
+        add     x7, x15, #384
+        mov     x9, x17
         mov     w10, #4
 
 .Llane4_size64_autosort:
@@ -359,24 +335,21 @@ lane4_neon_execute:
         ld2     { v6.4s, v7.4s }, [x7], #32
         LANE4_TRANSPOSE4 v0, v2, v4, v6, v16, v18, v20, v22
         LANE4_TRANSPOSE4 v1, v3, v5, v7, v17, v19, v21, v23
-        st2     { v16.4s, v17.4s }, [x9], #32
-        st2     { v18.4s, v19.4s }, [x9], #32
+        st2     { v4.4s, v5.4s }, [x9], #32
         st2     { v20.4s, v21.4s }, [x9], #32
+        st2     { v6.4s, v7.4s }, [x9], #32
         st2     { v22.4s, v23.4s }, [x9], #32
         subs    w10, w10, #1
         b.ne    .Llane4_size64_autosort
 
-        ldr     x30, [sp, #32]
-        ldp     x21, x22, [sp, #16]
-        ldp     x19, x20, [sp], #48
+        ldr     x30, [sp], #16
         mov     w0, wzr
         ret
 
 .Llane4_generic:
         stp     x19, x20, [sp, #-128]!
         stp     x21, x22, [sp, #16]
-        stp     x23, x24, [sp, #32]
-        str     x30, [sp, #48]
+        stp     x23, x30, [sp, #32]
         stp     d8, d9, [sp, #64]
         stp     d10, d11, [sp, #80]
         stp     d12, d13, [sp, #96]
@@ -387,7 +360,8 @@ lane4_neon_execute:
         mov     x0, x20
         ldr     x1, [x19, #32]
         ldr     x2, [x19, #PLAN_WORK]
-        ldr     x3, [x19, #8]
+        ldr     x23, [x19, #8]
+        mov     x3, x23
         ldr     w9, [x19, #16]
         tbz     w9, #0, .Llane4_generic_base4
         bl      .Llane4_base8
@@ -399,38 +373,34 @@ lane4_neon_execute:
         mov     x21, #4
 
 .Llane4_generic_stage_test:
-        ldr     x9, [x19, #8]
-        cmp     x21, x9
+        cmp     x21, x23
         b.hs    .Llane4_generic_finish
         ldr     x22, [x19, #48]
 
 .Llane4_generic_stage_loop:
         ldr     x0, [x19, #PLAN_WORK]
         mov     x1, x21
-        ldr     x2, [x19, #8]
+        mov     x2, x23
         mov     x3, x22
         bl      .Llane4_stage
         add     x9, x21, x21, lsl #1
         sub     x9, x9, #3
         add     x22, x22, x9, lsl #5
         lsl     x21, x21, #2
-        ldr     x9, [x19, #8]
-        cmp     x21, x9
+        cmp     x21, x23
         b.lo    .Llane4_generic_stage_loop
 
 .Llane4_generic_finish:
         ldr     x0, [x19, #PLAN_WORK]
         mov     x1, x20
-        ldr     x2, [x19, #8]
-        ldr     x3, [x19, #PLAN_FINISH_RE]
-        ldr     x4, [x19, #PLAN_FINISH_IM]
+        mov     x2, x23
+        ldr     x3, [x19, #PLAN_FINISH_ROOT]
         bl      .Llane4_finish
-        ldr     x30, [sp, #48]
         ldp     d14, d15, [sp, #112]
         ldp     d12, d13, [sp, #96]
         ldp     d10, d11, [sp, #80]
         ldp     d8, d9, [sp, #64]
-        ldp     x23, x24, [sp, #32]
+        ldp     x23, x30, [sp, #32]
         ldp     x21, x22, [sp, #16]
         ldp     x19, x20, [sp], #128
         mov     w0, wzr
@@ -475,30 +445,26 @@ lane4_neon_execute:
         .p2align 6
 .Llane4_base8:
 .Llane4_base8_loop:
-        ldr     w9, [x1], #4
-        add     x13, x0, x9, lsl #3
-        ld2     { v0.4s, v1.4s }, [x13]
-        ldr     w9, [x1], #4
-        add     x13, x0, x9, lsl #3
-        ld2     { v2.4s, v3.4s }, [x13]
-        ldr     w9, [x1], #4
-        add     x13, x0, x9, lsl #3
-        ld2     { v4.4s, v5.4s }, [x13]
-        ldr     w9, [x1], #4
-        add     x13, x0, x9, lsl #3
-        ld2     { v6.4s, v7.4s }, [x13]
-        ldr     w9, [x1], #4
-        add     x13, x0, x9, lsl #3
-        ld2     { v8.4s, v9.4s }, [x13]
-        ldr     w9, [x1], #4
-        add     x13, x0, x9, lsl #3
-        ld2     { v10.4s, v11.4s }, [x13]
-        ldr     w9, [x1], #4
-        add     x13, x0, x9, lsl #3
-        ld2     { v12.4s, v13.4s }, [x13]
-        ldr     w9, [x1], #4
-        add     x13, x0, x9, lsl #3
-        ld2     { v14.4s, v15.4s }, [x13]
+        ldp     w9, w10, [x1], #8
+        ldp     w11, w12, [x1], #8
+        ldp     w13, w14, [x1], #8
+        ldp     w15, w16, [x1], #8
+        add     x17, x0, x9, lsl #3
+        ld2     { v0.4s, v1.4s }, [x17]
+        add     x17, x0, x10, lsl #3
+        ld2     { v2.4s, v3.4s }, [x17]
+        add     x17, x0, x11, lsl #3
+        ld2     { v4.4s, v5.4s }, [x17]
+        add     x17, x0, x12, lsl #3
+        ld2     { v6.4s, v7.4s }, [x17]
+        add     x17, x0, x13, lsl #3
+        ld2     { v8.4s, v9.4s }, [x17]
+        add     x17, x0, x14, lsl #3
+        ld2     { v10.4s, v11.4s }, [x17]
+        add     x17, x0, x15, lsl #3
+        ld2     { v12.4s, v13.4s }, [x17]
+        add     x17, x0, x16, lsl #3
+        ld2     { v14.4s, v15.4s }, [x17]
 
         fadd    v16.4s, v0.4s, v2.4s
         fadd    v17.4s, v1.4s, v3.4s
@@ -568,7 +534,6 @@ lane4_neon_execute:
         add     x7, x0, x5
         add     x8, x7, x5
         add     x9, x8, x5
-        add     x10, x9, x5
         ldp     q0, q1, [x0]
         ldp     q2, q3, [x7]
         ldp     q4, q5, [x8]
@@ -617,14 +582,18 @@ lane4_neon_execute:
         b.ne    .Llane4_stage_butterfly
 
 .Llane4_stage_next:
-        mov     x0, x10
+        /*
+         * The fourth row's post-index stores have advanced x9 by one full
+         * row, so it already is the next block pointer.
+         */
+        mov     x0, x9
         cmp     x0, x13
         b.lo    .Llane4_stage_block
         ret
 
 /*
  * x0=work, x1=output, x2=inner row count,
- * x3=finish real roots, x4=finish imaginary roots.
+ * x3=packed {real[4], imaginary[4]} finish-root stream.
  */
         .p2align 6
 .Llane4_finish:
@@ -632,52 +601,41 @@ lane4_neon_execute:
         add     x7, x1, x5
         add     x8, x7, x5
         add     x9, x8, x5
-        lsl     x6, x2, #5
-        add     x11, x0, x6
-        lsl     x12, x2, #2
 
 .Llane4_finish_loop:
-        ldp     q0, q4, [x0, #0]
-        ldp     q1, q5, [x0, #32]
-        ldp     q2, q6, [x0, #64]
-        ldp     q3, q7, [x0, #96]
+        ldp     q0, q4, [x0], #128
+        ldp     q1, q5, [x0, #-96]
+        ldp     q2, q6, [x0, #-64]
+        ldp     q3, q7, [x0, #-32]
+        ldp     q24, q25, [x3], #32
+        ldp     q26, q27, [x3], #32
+        ldp     q28, q29, [x3], #32
         LANE4_TRANSPOSE4 v0, v1, v2, v3, v16, v17, v18, v19
         LANE4_TRANSPOSE4 v4, v5, v6, v7, v20, v21, v22, v23
 
-        ldr     q24, [x3]
-        ldr     q25, [x4]
-        fmul    v0.4s, v17.4s, v24.4s
-        fmul    v1.4s, v21.4s, v24.4s
-        fmls    v0.4s, v21.4s, v25.4s
-        fmla    v1.4s, v17.4s, v25.4s
-        ldr     q24, [x3, x12]
-        ldr     q25, [x4, x12]
-        fmul    v2.4s, v18.4s, v24.4s
-        fmul    v3.4s, v22.4s, v24.4s
-        fmls    v2.4s, v22.4s, v25.4s
-        fmla    v3.4s, v18.4s, v25.4s
-        add     x13, x3, x12, lsl #1
-        ldr     q24, [x13]
-        add     x13, x4, x12, lsl #1
-        ldr     q25, [x13]
-        fmul    v4.4s, v19.4s, v24.4s
-        fmul    v5.4s, v23.4s, v24.4s
-        fmls    v4.4s, v23.4s, v25.4s
-        fmla    v5.4s, v19.4s, v25.4s
+        fmul    v0.4s, v18.4s, v24.4s
+        fmul    v1.4s, v22.4s, v24.4s
+        fmls    v0.4s, v22.4s, v25.4s
+        fmla    v1.4s, v18.4s, v25.4s
+        fmul    v4.4s, v3.4s, v26.4s
+        fmul    v5.4s, v7.4s, v26.4s
+        fmls    v4.4s, v7.4s, v27.4s
+        fmla    v5.4s, v3.4s, v27.4s
+        fmul    v8.4s, v19.4s, v28.4s
+        fmul    v9.4s, v23.4s, v28.4s
+        fmls    v8.4s, v23.4s, v29.4s
+        fmla    v9.4s, v19.4s, v29.4s
 
         LANE4_RADIX4_SOA \
-                v16, v20, v0, v1, v2, v3, v4, v5, \
+                v2, v6, v0, v1, v4, v5, v8, v9, \
                 v16, v17, v18, v19, v20, v21, v22, v23, \
-                v6, v7, v24, v25, v26, v27, v28, v29
+                v10, v11, v24, v25, v26, v27, v28, v29
         st2     { v16.4s, v17.4s }, [x1], #32
         st2     { v18.4s, v19.4s }, [x7], #32
         st2     { v20.4s, v21.4s }, [x8], #32
         st2     { v22.4s, v23.4s }, [x9], #32
-        add     x0, x0, #128
-        add     x3, x3, #16
-        add     x4, x4, #16
-        cmp     x0, x11
-        b.lo    .Llane4_finish_loop
+        subs    x2, x2, #4
+        b.ne    .Llane4_finish_loop
         ret
 
         .size   lane4_neon_execute, .-lane4_neon_execute
