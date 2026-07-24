@@ -1,6 +1,10 @@
 #include "fft.h"
 #include "ffmpeg_fft.h"
+#include "h16_hybrid.h"
 #include "lane4_portable.h"
+#if HAVE_TANGENT_AARCH64_ASM
+#include "lane2_neon.h"
+#endif
 #if HAVE_TANGENT_X86_ASM
 #include "lane2_sse.h"
 #include "lane4_fft.h"
@@ -91,7 +95,11 @@ struct fft_plan {
     fft_complex *scratch;
     ffmpeg_fft_plan *ffmpeg;
     ffmpeg_fft_plan *ffmpeg_sse;
+    h16_hybrid_plan *h16_hybrid;
     lane4_portable_plan *lane4_portable;
+#if HAVE_TANGENT_AARCH64_ASM
+    lane2_neon_plan *lane2_neon;
+#endif
 #if HAVE_TANGENT_X86_ASM
     lane2_sse_plan *lane2_sse;
     lane4_fft_plan *lane4;
@@ -1048,6 +1056,7 @@ fft_plan *fft_plan_create(size_t n)
     plan->scratch = (fft_complex *)aligned_alloc(
         64,
         ((n * sizeof(*plan->scratch) + 63) / 64) * 64);
+    plan->h16_hybrid = h16_hybrid_plan_create(n);
     if (n <= 131072) {
         plan->ffmpeg = ffmpeg_fft_plan_create(n);
 #if defined(__i386__) || defined(__x86_64__)
@@ -1056,6 +1065,11 @@ fft_plan *fft_plan_create(size_t n)
         if (n >= 16) {
             plan->lane4_portable = lane4_portable_plan_create(n);
         }
+#if HAVE_TANGENT_AARCH64_ASM
+        if (n >= 16) {
+            plan->lane2_neon = lane2_neon_plan_create(n);
+        }
+#endif
 #if HAVE_TANGENT_X86_ASM
         if (n >= 16 &&
             (plan->lane4_cpu_features & LANE4_CPU_SSE) != 0) {
@@ -1087,11 +1101,15 @@ fft_plan *fft_plan_create(size_t n)
 #endif
     }
     if (plan->scratch == NULL ||
+        plan->h16_hybrid == NULL ||
         (n <= 131072 && plan->ffmpeg == NULL) ||
 #if defined(__i386__) || defined(__x86_64__)
         (n <= 131072 && plan->ffmpeg_sse == NULL) ||
 #endif
         (n >= 16 && n <= 131072 && plan->lane4_portable == NULL) ||
+#if HAVE_TANGENT_AARCH64_ASM
+        (n >= 16 && n <= 131072 && plan->lane2_neon == NULL) ||
+#endif
 #if HAVE_TANGENT_X86_ASM
         (n >= 16 && n <= 131072 &&
          (plan->lane4_cpu_features & LANE4_CPU_SSE) != 0 &&
@@ -1134,7 +1152,11 @@ void fft_plan_destroy(fft_plan *plan)
     free(plan->scratch);
     ffmpeg_fft_plan_destroy(plan->ffmpeg);
     ffmpeg_fft_plan_destroy(plan->ffmpeg_sse);
+    h16_hybrid_plan_destroy(plan->h16_hybrid);
     lane4_portable_plan_destroy(plan->lane4_portable);
+#if HAVE_TANGENT_AARCH64_ASM
+    lane2_neon_plan_destroy(plan->lane2_neon);
+#endif
 #if HAVE_TANGENT_X86_ASM
     lane2_sse_plan_destroy(plan->lane2_sse);
     lane4_fft_plan_destroy(plan->lane4);
@@ -1197,6 +1219,13 @@ int fft_plan_supports(const fft_plan *plan, fft_algorithm algorithm)
     if (algorithm == FFT_FFMPEG_SSE) {
         return plan->ffmpeg_sse != NULL;
     }
+    if (algorithm == FFT_SCALED_H16_HYBRID) {
+        return plan->h16_hybrid != NULL;
+    }
+    if (algorithm == FFT_SCALED_H16_PAIRED_AVX2) {
+        return h16_hybrid_paired_avx2_available(
+            plan->h16_hybrid);
+    }
     if (algorithm == FFT_TANGENT_X86_ASM) {
         return plan->tangent_x86_asm_available;
     }
@@ -1216,6 +1245,21 @@ int fft_plan_supports(const fft_plan *plan, fft_algorithm algorithm)
     if (algorithm == FFT_LANE2_SSE) {
 #if HAVE_TANGENT_X86_ASM
         return plan->lane2_sse != NULL;
+#else
+        return 0;
+#endif
+    }
+    if (algorithm == FFT_LANE2_NEON) {
+#if HAVE_TANGENT_AARCH64_ASM
+        return plan->lane2_neon != NULL;
+#else
+        return 0;
+#endif
+    }
+    if (algorithm == FFT_LANE4_NEON) {
+#if HAVE_TANGENT_AARCH64_ASM
+        return plan->lane4_portable != NULL &&
+               plan->n >= 16 && plan->n <= 131072;
 #else
         return 0;
 #endif
@@ -2511,6 +2555,14 @@ int fft_execute(fft_plan *plan, fft_algorithm algorithm, fft_complex *data)
         !fft_plan_supports(plan, algorithm)) {
         return -1;
     }
+    if (algorithm == FFT_LANE2_NEON &&
+        !fft_plan_supports(plan, algorithm)) {
+        return -1;
+    }
+    if (algorithm == FFT_LANE4_NEON &&
+        !fft_plan_supports(plan, algorithm)) {
+        return -1;
+    }
 
     switch (algorithm) {
     case FFT_RADIX2:
@@ -2600,6 +2652,16 @@ int fft_execute(fft_plan *plan, fft_algorithm algorithm, fft_complex *data)
     case FFT_LANE2_SSE:
         return -1;
 #endif
+#if HAVE_TANGENT_AARCH64_ASM
+    case FFT_LANE2_NEON:
+        return lane2_neon_execute(plan->lane2_neon, data);
+    case FFT_LANE4_NEON:
+        return lane4_neon_execute(plan->lane4_portable, data);
+#else
+    case FFT_LANE2_NEON:
+    case FFT_LANE4_NEON:
+        return -1;
+#endif
     case FFT_FFMPEG:
         return plan->ffmpeg == NULL
                    ? -1
@@ -2608,6 +2670,11 @@ int fft_execute(fft_plan *plan, fft_algorithm algorithm, fft_complex *data)
         return plan->ffmpeg_sse == NULL
                    ? -1
                    : ffmpeg_fft_execute(plan->ffmpeg_sse, data);
+    case FFT_SCALED_H16_HYBRID:
+        return h16_hybrid_fft_execute(plan->h16_hybrid, data);
+    case FFT_SCALED_H16_PAIRED_AVX2:
+        return h16_hybrid_paired_avx2_execute(
+            plan->h16_hybrid, data);
     default:
         return -1;
     }
@@ -2700,6 +2767,14 @@ const char *fft_algorithm_name(fft_algorithm algorithm)
         return "hw-sse-auto";
     case FFT_FFMPEG_SSE:
         return "ffmpeg-sse";
+    case FFT_SCALED_H16_HYBRID:
+        return "scaled-h16-hybrid";
+    case FFT_SCALED_H16_PAIRED_AVX2:
+        return "scaled-h16-paired-avx2";
+    case FFT_LANE2_NEON:
+        return "lane2-neon";
+    case FFT_LANE4_NEON:
+        return "lane4-neon-fused";
     default:
         return "unknown";
     }
@@ -2712,6 +2787,8 @@ uint64_t fft_theoretical_flops(fft_algorithm algorithm, size_t n)
 
     if (algorithm == FFT_FFMPEG || algorithm == FFT_FFMPEG_SSE ||
         algorithm == FFT_LANE2_SSE ||
+        algorithm == FFT_LANE2_NEON ||
+        algorithm == FFT_LANE4_NEON ||
         (algorithm >= FFT_LANE4_C &&
          algorithm <= FFT_LANE4_AVX2_FMA)) {
         return 0;
@@ -2758,6 +2835,8 @@ uint64_t fft_theoretical_flops(fft_algorithm algorithm, size_t n)
     case FFT_LANE4_AVX2:
     case FFT_LANE4_AVX2_FMA:
     case FFT_LANE2_SSE:
+    case FFT_LANE2_NEON:
+    case FFT_LANE4_NEON:
     case FFT_FFMPEG:
     case FFT_FFMPEG_SSE:
         return 0;

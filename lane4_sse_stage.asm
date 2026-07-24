@@ -22,6 +22,7 @@ SECTION .text
 
 ; lane4_portable_plan offsets. Planning and allocation remain in C; execution
 ; enters here directly so every SSE-flavour public transform is assembly.
+%define PLAN_N                0
 %define PLAN_INNER_SIZE       8
 %define PLAN_INNER_LEVELS    16
 %define PLAN_MIXED_PERM      32
@@ -51,6 +52,12 @@ mangle(lane4_sse42_execute):
     jz .execute_error
     cmp qword [rdi + PLAN_REPLICATED_ROOT], 0
     je .execute_error
+    cmp qword [rdi + PLAN_N], 16
+    je mangle(lane4_sse_fused16)
+    cmp qword [rdi + PLAN_N], 32
+    je mangle(lane4_sse_fused32)
+    cmp qword [rdi + PLAN_N], 64
+    je mangle(lane4_sse_fused64)
 
     push rbp
     push rbx
@@ -558,3 +565,143 @@ cglobal sse_finish, 5, 9, 16, work, output, inner, finishre, finishim, out1, out
     cmp finishreq, endq
     jb .finish_loop
     RET
+
+; ---------------------------------------------------------------------------
+; Fixed-size fused leaves shared by SSE/SSE2/SSE3/SSSE3/SSE4.1/SSE4.2
+; ---------------------------------------------------------------------------
+
+; Fixed-register SoA radix-4. Inputs and outputs are m0:m1 ... m6:m7;
+; m8-m15 are temporary.
+%macro RADIX4_SOA_FIXED 0
+    movaps m8, m0
+    movaps m9, m1
+    addps  m8, m4
+    addps  m9, m5
+    subps  m0, m4
+    subps  m1, m5
+
+    movaps m10, m2
+    movaps m11, m3
+    addps  m10, m6
+    addps  m11, m7
+    subps  m2, m6
+    subps  m3, m7
+
+    movaps m12, m8
+    movaps m13, m9
+    addps  m12, m10
+    addps  m13, m11
+    subps  m8, m10
+    subps  m9, m11
+
+    movaps m10, m0
+    movaps m11, m1
+    addps  m10, m3
+    subps  m11, m2
+    subps  m0, m3
+    addps  m1, m2
+
+    movaps m2, m10
+    movaps m3, m11
+    movaps m4, m8
+    movaps m5, m9
+    movaps m6, m0
+    movaps m7, m1
+    movaps m0, m12
+    movaps m1, m13
+%endmacro
+
+global mangle(lane4_sse_fused16)
+align 64
+mangle(lane4_sse_fused16):
+    mov rdx, [rdi + PLAN_FINISH_RE]
+    mov rcx, [rdi + PLAN_FINISH_IM]
+    mov rdi, rsi
+
+    LOAD_INPUT4 m0, m1, rdi
+    LOAD_INPUT4 m2, m3, rdi + 32
+    LOAD_INPUT4 m4, m5, rdi + 64
+    LOAD_INPUT4 m6, m7, rdi + 96
+    RADIX4_SOA_FIXED
+
+    COMPLEX_MULTIPLY_SPLIT m2, m3, [rdx],      [rcx]
+    COMPLEX_MULTIPLY_SPLIT m4, m5, [rdx + 16], [rcx + 16]
+    COMPLEX_MULTIPLY_SPLIT m6, m7, [rdx + 32], [rcx + 32]
+
+    TRANSPOSE4 m0, m2, m4, m6
+    TRANSPOSE4 m1, m3, m5, m7
+    ; TRANSPOSE4's historical output order is 0,2,1,3 because the generic
+    ; finish consumes that order directly.  The fixed radix macro wants
+    ; natural 0,1,2,3 rows.
+    movaps m14, m2
+    movaps m2, m4
+    movaps m4, m14
+    movaps m14, m3
+    movaps m3, m5
+    movaps m5, m14
+    RADIX4_SOA_FIXED
+
+    STORE_COMPLEX4 m0, m1, rdi
+    STORE_COMPLEX4 m2, m3, rdi + 32
+    STORE_COMPLEX4 m4, m5, rdi + 64
+    STORE_COMPLEX4 m6, m7, rdi + 96
+    xor eax, eax
+    ret
+
+; N=32 has one FFT8 SoA leaf and no upper stage.  Keeping this fixed path
+; removes generic stage tests and the reusable-executor frame.
+global mangle(lane4_sse_fused32)
+align 64
+mangle(lane4_sse_fused32):
+    push rbp
+    push r12
+    sub rsp, 8
+    mov rbp, rdi
+    mov r12, rsi
+    mov rdi, r12
+    mov rsi, [rbp + PLAN_MIXED_PERM]
+    mov rdx, [rbp + PLAN_WORK]
+    mov rcx, 8
+    call mangle(lane4_sse_base8_sse)
+    mov rdi, [rbp + PLAN_WORK]
+    mov rsi, r12
+    mov rdx, 8
+    mov rcx, [rbp + PLAN_FINISH_RE]
+    mov r4q, [rbp + PLAN_FINISH_IM]
+    call mangle(lane4_sse_finish_sse)
+    add rsp, 8
+    pop r12
+    pop rbp
+    xor eax, eax
+    ret
+
+; N=64 is exactly one FFT4 leaf layer, one radix-4 stage, and finish.
+global mangle(lane4_sse_fused64)
+align 64
+mangle(lane4_sse_fused64):
+    push rbp
+    push r12
+    sub rsp, 8
+    mov rbp, rdi
+    mov r12, rsi
+    mov rdi, r12
+    mov rsi, [rbp + PLAN_MIXED_PERM]
+    mov rdx, [rbp + PLAN_WORK]
+    mov rcx, 16
+    call mangle(lane4_sse_base4_sse)
+    mov rdi, [rbp + PLAN_WORK]
+    mov rsi, 4
+    mov rdx, 16
+    mov rcx, [rbp + PLAN_REPLICATED_ROOT]
+    call mangle(lane4_sse_stage_sse)
+    mov rdi, [rbp + PLAN_WORK]
+    mov rsi, r12
+    mov rdx, 16
+    mov rcx, [rbp + PLAN_FINISH_RE]
+    mov r4q, [rbp + PLAN_FINISH_IM]
+    call mangle(lane4_sse_finish_sse)
+    add rsp, 8
+    pop r12
+    pop rbp
+    xor eax, eax
+    ret

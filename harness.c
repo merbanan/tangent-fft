@@ -190,7 +190,7 @@ static int check_vector(size_t n,
         }
         if (!isfinite(error) || error > tolerance) {
             fprintf(stderr,
-                    "FAIL: %-16s %-7s n=%-5zu relative max error %.3e "
+                    "FAIL: %-24s %-7s n=%-5zu relative max error %.3e "
                     "(limit %.3e)\n",
                     fft_algorithm_name(selected),
                     inverse ? "inverse" : "forward",
@@ -292,7 +292,7 @@ static int run_correctness_tests(void)
             error = relative_max_error_float(work, radix, n);
             if (!isfinite(error) || error > tolerance) {
                 fprintf(stderr,
-                        "FAIL: %-16s n=%-8zu cross-check error %.3e "
+                        "FAIL: %-24s n=%-8zu cross-check error %.3e "
                         "(limit %.3e)\n",
                         fft_algorithm_name((fft_algorithm)algorithm),
                         n,
@@ -319,7 +319,7 @@ static int run_correctness_tests(void)
             error = relative_max_error_float(work, radix, n);
             if (!isfinite(error) || error > tolerance) {
                 fprintf(stderr,
-                        "FAIL: %-16s inverse n=%-8zu "
+                        "FAIL: %-24s inverse n=%-8zu "
                         "cross-check error %.3e (limit %.3e)\n",
                         fft_algorithm_name((fft_algorithm)algorithm),
                         n,
@@ -340,7 +340,7 @@ static int run_correctness_tests(void)
         printf("PASS: forward/inverse direct DFT through 512; "
                "cross-checks through 2^22\n");
         for (algorithm = 0; algorithm < FFT_ALGORITHM_COUNT; ++algorithm) {
-            printf("  %-16s worst error: forward %.3e, inverse %.3e\n",
+            printf("  %-24s worst error: forward %.3e, inverse %.3e\n",
                    fft_algorithm_name((fft_algorithm)algorithm),
                    forward_maxima[algorithm],
                    inverse_maxima[algorithm]);
@@ -487,7 +487,7 @@ static int run_benchmarks(const options *settings)
            settings->benchmark_inverse ? "Inverse" : "Forward");
     printf("FFmpeg AVTX native dispatch and an SSE4.2-and-below restricted "
            "plan are reported through N=131072.\n");
-    printf("%10s  %-16s %12s %10s %14s %11s %8s\n",
+    printf("%10s  %-24s %12s %10s %14s %11s %8s\n",
            "N",
            "algorithm",
            "median us",
@@ -570,7 +570,7 @@ static int run_benchmarks(const options *settings)
                               results[algorithm].median_seconds / 1.0e9;
 
                 if (flops == 0) {
-                    printf("%10zu  %-16s %12.3f %9.3fx %14s %11s %8zu\n",
+                    printf("%10zu  %-24s %12.3f %9.3fx %14s %11s %8zu\n",
                            n,
                            fft_algorithm_name(selected),
                            results[algorithm].median_seconds * 1.0e6,
@@ -579,7 +579,7 @@ static int run_benchmarks(const options *settings)
                            "n/a",
                            results[algorithm].samples);
                 } else {
-                    printf("%10zu  %-16s %12.3f %9.3fx %14llu %11.3f %8zu\n",
+                    printf("%10zu  %-24s %12.3f %9.3fx %14llu %11.3f %8zu\n",
                            n,
                            fft_algorithm_name(selected),
                            results[algorithm].median_seconds * 1.0e6,

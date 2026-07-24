@@ -1,0 +1,188 @@
+SIMD-Paired Scaled H16 Design Notes
+
+Purpose
+
+This document describes a revised implementation strategy that
+supersedes the earlier “lazy divide removal” idea. The previous proposal
+attempted to eliminate the divide-by-two inside the Alman–Rao scaled H8
+circuit by propagating scale metadata. That approach is not
+mathematically valid because the half-scaled value is immediately
+combined with values in a different scale class.
+
+Instead, this design keeps the arithmetic exactly correct and obtains
+efficiency by executing the two H8 branches of the H16 decomposition
+simultaneously inside SIMD lanes.
+
+Key Insight
+
+The standard H16 decomposition computes
+
+    p_i = x_i + x_(i+8)
+    q_i = x_i - x_(i+8)
+
+followed by two identical scaled H8 transforms.
+
+Rather than viewing them as independent transforms, execute both DAGs
+together.
+
+Every operation in one H8 has an identical operation in the other:
+
+    r1p = Bp + Cp
+    r1q = Bq + Cq
+
+    r2p = Dp + Hp
+    r2q = Dq + Hq
+
+etc.
+
+Pack corresponding values into SIMD lanes so that one vector instruction
+computes both operations simultaneously.
+
+SIMD Layout
+
+For AVX2, pack alternating p/q values from several independent
+transforms:
+
+    lane0 = p0(transform0)
+    lane1 = q0(transform0)
+    lane2 = p0(transform1)
+    lane3 = q0(transform1)
+    ...
+
+Every arithmetic instruction now evaluates both H8 branches.
+
+The divide-by-two remains an explicit multiply by 0.5:
+
+    T = R6 * 0.5f
+
+This is mathematically correct because both branches require exactly the
+same scaling.
+
+Instruction Count
+
+One paired scaled-H8 requires
+
+    22 packed additions/subtractions
+     1 packed multiply by 0.5
+    ------------------------------
+    23 packed arithmetic instructions
+
+Input generation determines the total cost.
+
+Case 1: Conventional formation of p and q
+
+        P = L + R
+        Q = L - R
+
+    Eight additions
+    Eight subtractions
+
+    Total:
+
+        16 + 23 = 39 packed arithmetic instructions.
+
+Case 2: Producer already emits doubled inputs and interleaved p/q lanes.
+
+    Use alternating add/sub instructions to generate p and q.
+
+    Eight packed instructions.
+
+    Total:
+
+        8 + 23 = 31 packed arithmetic instructions.
+
+Case 3: Producer cannot emit doubled values.
+
+    Seven explicit doubling operations are needed.
+
+    Total:
+
+        31 + 7 = 38 packed arithmetic instructions.
+
+Implementation Skeleton
+
+Conceptually:
+
+    vec r1 = B + C;
+    vec r2 = D + H;
+    vec r3 = F + G;
+
+    vec r4 = r1 + r2;
+    vec r5 = r3 + E;
+    vec r6 = r4 + r5;
+
+    vec t = r6 * 0.5f;
+
+    vec m  = A - t;
+    vec mD = m + D;
+    vec mE = m + E;
+    vec mH = m + H;
+
+Continue with the remaining H8 output equations exactly as in the
+original 23-operation circuit.
+
+No scale metadata is required inside the codelet.
+
+Producer Requirements
+
+The best version assumes the previous FFT stage already provides:
+
+    * alternating p/q lane ordering
+    * doubled values for coordinates 1..7
+
+This avoids:
+
+    * extra unpack operations
+    * explicit doubling
+    * temporary transposes
+
+The SIMD layout should remain unchanged until after the paired H8 stage.
+
+Complex FFT
+
+Use separate vectors for real and imaginary components.
+
+Execute the paired H8 once for real values and once for imaginary
+values.
+
+The arithmetic is unchanged.
+
+Expected Benefit
+
+This approach does NOT reduce the theoretical arithmetic-operation count
+proved by Alman–Rao.
+
+Instead, it reduces the number of issued SIMD arithmetic instructions by
+exploiting the identical structure of the two H8 branches.
+
+Unlike the previous lazy-scale proposal, every arithmetic operation is
+mathematically identical to the original circuit.
+
+Integration Recommendation
+
+Do not replace the lane4 architecture.
+
+Instead:
+
+    lane4 decomposition
+        ->
+    producer writes interleaved p/q layout
+        ->
+    paired SIMD scaled-H8
+        ->
+    paired twiddle kernel
+        ->
+    existing transpose/output stages
+
+The main optimization opportunity comes from preserving the interleaved
+representation across multiple stages so that layout conversion is not
+repeatedly performed.
+
+Status
+
+This design is an implementation optimization only.
+
+It does not establish a new <=61-operation H16 arithmetic circuit.
+
+The improvement comes from SIMD execution efficiency rather than a
+reduction in the underlying scalar arithmetic complexity.

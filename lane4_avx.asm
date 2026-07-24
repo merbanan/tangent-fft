@@ -410,6 +410,8 @@ align 64
     je      .size16
     cmp     qword [rdi + PLAN_N], 32
     je      .size32
+    cmp     qword [rdi + PLAN_N], 64
+    je      .size64
 
     push    rbp
     push    rbx
@@ -480,6 +482,33 @@ align 64
     mov     rsi, rcx
     xor     eax, eax
     jmp     lane4_asm_fft32
+.size64:
+    push    rbp
+    push    r12
+    sub     rsp, 8
+    mov     rbp, rdi
+    mov     r12, rsi
+    mov     rdi, r12
+    mov     rsi, [rbp + PLAN_PERMUTATION]
+    mov     rdx, [rbp + PLAN_WORK]
+    mov     rcx, 16
+    call    lane4_base4
+    mov     rdi, [rbp + PLAN_WORK]
+    mov     rsi, 4
+    mov     rdx, 16
+    mov     rcx, [rbp + PLAN_TWIDDLE]
+    call    %3
+    mov     rdi, [rbp + PLAN_WORK]
+    mov     rsi, r12
+    mov     rdx, 16
+    mov     rcx, [rbp + PLAN_FINISH_FACTOR]
+    call    %4
+    add     rsp, 8
+    pop     r12
+    pop     rbp
+    vzeroupper
+    xor     eax, eax
+    ret
 .error:
     mov     eax, -1
     ret

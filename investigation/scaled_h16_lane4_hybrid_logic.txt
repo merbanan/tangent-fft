@@ -1,0 +1,738 @@
+Scaled H16 / Lane4 Hybrid FFT Implementation Logic
+====================================================
+
+Purpose
+-------
+
+This document describes the complete logic needed to prototype a SIMD-oriented FFT
+that combines:
+
+1. The lane4 decomposition and memory layout used in modern AVX2/FMA FFT code.
+2. Bernstein-style scale propagation and tangent/cotangent twiddle reductions.
+3. Alman–Rao-style low-operation-count Walsh–Hadamard subcircuits.
+4. A scaled H16 codelet that costs:
+      - 60 vector additions/subtractions plus two lazy divide-by-two scale nodes, or
+      - 62 arithmetic operations in the conventional arithmetic-count model.
+
+The proposed design should be treated as an experimental hybrid. It is not a proven
+asymptotic improvement over Alman–Rao, and it is not guaranteed to outperform a
+carefully tuned lane4 implementation. Its purpose is to test whether lower arithmetic
+count can be preserved while retaining a hardware-friendly lane-based schedule.
+
+
+1. Mathematical conventions
+---------------------------
+
+The forward complex DFT is
+
+    X[k] = sum_{n=0}^{N-1} x[n] * exp(-2*pi*i*n*k/N).
+
+The inverse DFT is
+
+    x[n] = (1/N) * sum_{k=0}^{N-1} X[k] * exp(+2*pi*i*n*k/N).
+
+Assume:
+
+    N = 2^m.
+
+The Walsh–Hadamard transform of length 2^r is denoted H_(2^r). For H16:
+
+    H16 = [ H8   H8
+            H8  -H8 ].
+
+Therefore, if
+
+    p_i = x_i + x_(i+8)
+    q_i = x_i - x_(i+8),
+
+then
+
+    H16(x) = concat(H8(p), H8(q)).
+
+
+2. High-level hybrid architecture
+---------------------------------
+
+The recommended architecture is:
+
+    lane4 outer FFT decomposition
+        +
+    register-resident radix-4/radix-8 leaves
+        +
+    selected scaled H16/H8 addition networks
+        +
+    Bernstein-style scaled paired-twiddle kernels
+        +
+    fused transpose, twiddle, and store stages.
+
+Do not replace the whole lane4 schedule with an Alman–Rao recursion.
+
+Instead:
+
+1. Keep lane4's physical data layout.
+2. Keep lane4's cache blocking and stage traversal.
+3. Keep lane4's fused input permutation and output transpose.
+4. Replace only selected addition networks with scaled H8/H16 circuits.
+5. Use scale metadata to avoid explicit divisions by two.
+6. Fuse remaining powers-of-two into existing twiddle constants or inverse
+   normalization.
+
+
+3. SIMD data layout
+-------------------
+
+Use structure-of-arrays layout for codelets.
+
+For AVX2 single precision, each vector contains eight independent transforms:
+
+    v0 = coordinate 0 from transforms 0..7
+    v1 = coordinate 1 from transforms 0..7
+    ...
+    v15 = coordinate 15 from transforms 0..7.
+
+For AVX-512 single precision, each vector contains sixteen independent transforms.
+
+The SIMD lanes should represent independent transforms, not the coordinates of one
+transform. This avoids horizontal reductions and lane-crossing shuffles inside the
+H16 circuit.
+
+For complex data, use separate real and imaginary vectors:
+
+    real[k] = real part of coordinate k for all batched transforms
+    imag[k] = imaginary part of coordinate k for all batched transforms.
+
+Apply the same H16 dataflow independently to real and imaginary components.
+
+
+4. Scale representation
+-----------------------
+
+A scaled value is conceptually represented as:
+
+    logical_value = physical_value * 2^scale_exp.
+
+The scale exponent should normally not be stored beside every SIMD register. For a
+fixed FFT plan, scale classes should be known in advance.
+
+Represent scale state through one or more of:
+
+1. The selected codelet variant.
+2. A compile-time constant.
+3. A plan-time stage descriptor.
+4. A pointer to a pre-scaled twiddle table.
+5. A small scale-class identifier.
+
+Avoid runtime floating-point division by two where possible.
+
+A lazy division by two is represented as:
+
+    scale_exp = scale_exp - 1.
+
+At a later twiddle multiplication:
+
+    (2^e * x) * W = x * (2^e * W).
+
+Therefore, store a pre-scaled twiddle:
+
+    W_scaled = 2^e * W.
+
+For the inverse transform, combine the remaining scale with 1/N:
+
+    2^e / N = 2^(e-m).
+
+
+5. Scaled H8 circuit
+--------------------
+
+Logical inputs:
+
+    (a, b, c, d, e, f, g, h).
+
+Physical input contract:
+
+    (a, 2b, 2c, 2d, 2e, 2f, 2g, 2h).
+
+Rename the physical inputs:
+
+    A = a
+    B = 2b
+    C = 2c
+    D = 2d
+    E = 2e
+    F = 2f
+    G = 2g
+    H = 2h.
+
+The straight-line circuit is:
+
+    r1 = B + C
+    r2 = D + H
+    r3 = F + G
+    r4 = r1 + r2
+    r5 = r3 + E
+    r6 = r4 + r5
+    t  = r6 / 2
+    m  = A - t
+    mD = m + D
+    mE = m + E
+    mH = m + H
+
+    y0 = A + t
+    u1 = mE + C
+    y1 = u1 + G
+    u2 = mE + B
+    y2 = u2 + F
+    y3 = mE + r2
+    y4 = mD + r1
+    u5 = mH + C
+    y5 = u5 + F
+    u6 = mH + B
+    y6 = u6 + G
+    y7 = mD + r3
+
+Operation count:
+
+    22 additions/subtractions
+    1 division by two
+    -------------------------
+    23 arithmetic operations.
+
+When the division by two is lazy scale metadata:
+
+    22 issued vector additions/subtractions
+    1 scale-state update.
+
+
+6. Scaled H16 construction
+--------------------------
+
+Split logical input x[0..15]:
+
+    left  = x[0..7]
+    right = x[8..15].
+
+Required physical input scaling:
+
+    z[0]  = x[0]
+    z[8]  = x[8]
+
+and, for all other indices:
+
+    z[i] = 2*x[i].
+
+Equivalently:
+
+    D16 = diag(
+        1,2,2,2,2,2,2,2,
+        1,2,2,2,2,2,2,2
+    ).
+
+Initial butterflies:
+
+    P[i] = z[i] + z[i+8]
+    Q[i] = z[i] - z[i+8]
+    for i = 0..7.
+
+Then:
+
+    P = (p0, 2p1, 2p2, ..., 2p7)
+    Q = (q0, 2q1, 2q2, ..., 2q7),
+
+which matches the scaled H8 input contract.
+
+Compute:
+
+    Yplus  = scaled_H8(P)
+    Yminus = scaled_H8(Q).
+
+Output:
+
+    y[0..7]  = Yplus
+    y[8..15] = Yminus.
+
+Arithmetic count:
+
+    8 additions for P
+    8 subtractions for Q
+    23 operations for first H8
+    23 operations for second H8
+    --------------------------------
+    62 standard arithmetic operations.
+
+Issued vector arithmetic with lazy halves:
+
+    16 initial vector adds/subtracts
+    22 vector adds/subtracts for first H8
+    22 vector adds/subtracts for second H8
+    --------------------------------------
+    60 issued vector adds/subtracts
+    plus two lazy half-scale nodes.
+
+
+7. SIMD-friendly H16 pseudocode
+-------------------------------
+
+Conceptual AVX2 pseudocode:
+
+    void scaled_h16(
+        vec z_real[16],
+        vec z_imag[16],
+        vec y_real[16],
+        vec y_imag[16],
+        scale_state *state
+    )
+    {
+        vec p_real[8], q_real[8];
+        vec p_imag[8], q_imag[8];
+
+        for (i = 0; i < 8; ++i) {
+            p_real[i] = add(z_real[i], z_real[i+8]);
+            q_real[i] = sub(z_real[i], z_real[i+8]);
+
+            p_imag[i] = add(z_imag[i], z_imag[i+8]);
+            q_imag[i] = sub(z_imag[i], z_imag[i+8]);
+        }
+
+        scaled_h8(p_real, y_real + 0,  state_for_plus_real);
+        scaled_h8(q_real, y_real + 8,  state_for_minus_real);
+        scaled_h8(p_imag, y_imag + 0,  state_for_plus_imag);
+        scaled_h8(q_imag, y_imag + 8,  state_for_minus_imag);
+    }
+
+The real and imaginary circuits are identical and independent.
+
+On AVX2, process the two H8 halves sequentially unless register allocation proves
+that interleaving is spill-free.
+
+On AVX-512, partial interleaving may improve latency hiding because 32 vector
+registers are available.
+
+
+8. Dependency-chain considerations
+----------------------------------
+
+The scaled H8 circuit has a long critical chain:
+
+    r1/r2/r3
+      -> r4/r5
+      -> r6
+      -> t
+      -> m
+      -> mD/mE/mH
+      -> outputs.
+
+To improve instruction-level parallelism:
+
+1. Compute r1, r2, and r3 independently.
+2. Start r4 and r5 as soon as their inputs are ready.
+3. While waiting for r6, prepare independent work from another H8 block.
+4. Interleave P and Q H8 circuits if registers permit.
+5. Interleave real and imaginary circuits if doing so does not cause spills.
+6. Emit output branches in an order that minimizes live temporaries.
+7. Store completed output vectors early if they are not immediately consumed.
+
+For AVX2:
+
+    preferred order:
+        P-real
+        P-imag
+        Q-real
+        Q-imag
+
+or an experimentally selected interleaving.
+
+For AVX-512:
+
+    execute two or more H8 instances in parallel to hide add latency.
+
+
+9. Bernstein-style paired-twiddle kernel
+----------------------------------------
+
+For paired subtransform outputs B and C:
+
+    B = br + i*bi
+    C = cr + i*ci.
+
+Let:
+
+    W  = c - i*s
+    W* = c + i*s.
+
+Compute shared sums and differences:
+
+    pr = br + cr
+    pi = bi + ci
+    qr = br - cr
+    qi = bi - ci.
+
+Then:
+
+    W*B + conjugate(W)*C
+        = (c*pr + s*qi)
+        + i*(c*pi - s*qr)
+
+and:
+
+    W*B - conjugate(W)*C
+        = (c*qr + s*pi)
+        + i*(c*qi - s*pr).
+
+Use FMA where available:
+
+    t0r = fma(s,  qi, c*pr)
+    t0i = fma(-s, qr, c*pi)
+    t1r = fma(s,  pi, c*qr)
+    t1i = fma(-s, pr, c*qi).
+
+Bernstein scaling should absorb either c or s into the recursive scale. Select the
+representation that keeps the ratio coefficient bounded:
+
+    1 - i*tan(theta)
+
+or:
+
+    cot(theta) - i.
+
+Use tangent when |tan(theta)| <= 1.
+
+Use cotangent when |cot(theta)| < 1.
+
+Do not generate large tangent or cotangent constants.
+
+
+10. Lane4 integration
+---------------------
+
+Keep lane4's outer factorization.
+
+For N = 4M, split the input into four residue classes:
+
+    x0[m] = x[4m]
+    x1[m] = x[4m+1]
+    x2[m] = x[4m+2]
+    x3[m] = x[4m+3].
+
+Compute four M-point transforms in SIMD-friendly lanes.
+
+After the subtransforms:
+
+1. Apply stage twiddles.
+2. Perform the final FFT4 combination.
+3. Fuse transpose and stores.
+
+The scaled H16 circuit should be introduced only where the existing lane4 schedule
+contains a sufficiently large addition-only or Hadamard-like network.
+
+Candidate integration points:
+
+1. Internal addition networks in modified split-radix combination stages.
+2. Batched transform blocks where at least one full SIMD vector of independent
+   H16 instances exists.
+3. Medium-sized cache-resident stages.
+4. Stages where no extra load/store pass is required.
+5. Stages where H16 outputs feed twiddle multiplications capable of absorbing scale.
+
+Avoid using scaled H16:
+
+1. As a replacement for a tiny register-resident FFT16 leaf without benchmarking.
+2. When fewer than one full SIMD vector of independent transforms is available.
+3. Where it introduces extra transpose or gather operations.
+4. Where output scales cannot be absorbed cheaply.
+5. Where register pressure causes spills.
+
+
+11. Plan-time metadata
+----------------------
+
+The FFT plan should contain:
+
+    transform size
+    selected ISA
+    SIMD width
+    stage descriptors
+    input permutation
+    twiddle-table pointers
+    scale class per stage
+    selected codelet per stage
+    cache tile size
+    inverse-normalization scale
+    alignment requirements.
+
+A stage descriptor may contain:
+
+    struct stage_desc {
+        int radix;
+        int block_size;
+        int stride;
+        int codelet_id;
+        int input_scale_class;
+        int output_scale_class;
+        const twiddle_block *twiddles;
+    };
+
+Twiddle tables should be generated per scale class:
+
+    twiddle_scaled = twiddle * 2^scale_exp.
+
+Where possible, use exact power-of-two scaling during table generation.
+
+
+12. Register allocation
+-----------------------
+
+AVX2 provides 16 YMM registers.
+
+Goals:
+
+    no spills
+    no unnecessary moves
+    no stack temporaries inside codelets.
+
+Recommended strategy:
+
+1. Fuse the P/Q butterflies with the first H8 consumers.
+2. Reuse dead input registers.
+3. Store completed outputs before beginning the next half if necessary.
+4. Do not keep all P and Q vectors live simultaneously.
+5. Generate separate schedules for AVX2 and AVX-512.
+
+AVX-512 provides 32 ZMM registers and is a better target for simultaneous execution
+of P and Q or real and imaginary circuits.
+
+AArch64 NEON also provides 32 vector registers and may support a favorable schedule,
+although vector width is smaller.
+
+
+13. Cache strategy
+------------------
+
+Use cache-sized tiles.
+
+Candidate starting sizes:
+
+    AVX2:
+        256 or 512 complex float values.
+
+    AVX-512:
+        512 or 1024 complex float values.
+
+Benchmark multiple values.
+
+Within a tile:
+
+1. Load permuted inputs.
+2. Execute fixed radix leaves.
+3. Execute selected H8/H16 codelets.
+4. Apply paired twiddles.
+5. Fuse the final transpose.
+6. Store sequentially.
+
+For large transforms, use a four-step or six-step FFT decomposition with blocked
+transposes.
+
+
+14. Numerical behavior
+----------------------
+
+Scale propagation can improve or worsen numerical range.
+
+Potential issues:
+
+    overflow
+    underflow
+    subnormal values
+    accumulated output scaling
+    coefficient rounding
+    cancellation.
+
+Mitigations:
+
+1. Keep scale exponents within a bounded range.
+2. Renormalize occasionally at stage boundaries.
+3. Use separate plans for float and double.
+4. Fold powers of two into coefficients exactly when representable.
+5. Avoid tangent coefficients with magnitude greater than one.
+6. Compare against a long-double reference DFT for small sizes.
+7. Measure maximum absolute error and relative RMS error.
+8. Test adversarial dynamic-range inputs.
+
+
+15. Correctness validation
+--------------------------
+
+Validate each codelet symbolically or numerically.
+
+For H8:
+
+1. Construct its 8x8 linear transformation matrix by applying the codelet to basis
+   vectors.
+2. Undo the documented input scaling.
+3. Verify exact equality with H8 using rational arithmetic.
+
+For H16:
+
+1. Construct the full 16x16 matrix.
+2. Apply D16^-1 to account for physical input scaling.
+3. Verify equality with H16.
+4. Verify output scale metadata.
+
+For the FFT:
+
+1. Compare against an O(N^2) long-double DFT for small N.
+2. Compare against a trusted FFT implementation for larger N.
+3. Test forward and inverse round trips.
+4. Test impulses.
+5. Test constant inputs.
+6. Test single-frequency complex sinusoids.
+7. Test random inputs.
+8. Test extreme exponents.
+9. Test all supported FFT sizes.
+10. Test aligned and unaligned user buffers if both are supported.
+
+
+16. Performance validation
+--------------------------
+
+Use the same benchmark harness and data layout for all implementations.
+
+Compare against:
+
+    lane4 portable
+    lane4 SSE
+    lane4 AVX2
+    lane4 AVX2/FMA
+    tangent AVX2/FMA
+    existing split-radix implementation
+    FFmpeg or another established baseline.
+
+Measure:
+
+    wall-clock time
+    cycles per transform
+    cycles per element
+    retired floating-point instructions
+    retired add/sub instructions
+    retired multiply/FMA instructions
+    shuffle instructions
+    loads and stores
+    L1 data-cache misses
+    L2 cache misses
+    branch misses
+    register spills
+    code size
+    maximum numerical error.
+
+Test:
+
+    cold cache
+    warm cache
+    single transform
+    repeated transforms
+    batched transforms
+    multiple threads
+    pinned CPU core
+    fixed CPU frequency where possible.
+
+
+17. Success criteria
+--------------------
+
+The hybrid is worth keeping only when it achieves all of the following:
+
+1. Correctness comparable to lane4.
+2. No significant new numerical instability.
+3. No register spills in the target codelet.
+4. No additional memory pass.
+5. No runtime divide-by-two arithmetic instructions.
+6. No extra shuffle-heavy layout conversion.
+7. Reproducible speed improvement at one or more meaningful transform sizes.
+
+A realistic first target is:
+
+    0% to 5% speedup over lane4 AVX2/FMA at selected sizes.
+
+A result slower than lane4 may still be useful if it exposes which theoretical
+savings are lost to latency, register pressure, or memory traffic.
+
+
+18. Recommended implementation order
+------------------------------------
+
+Phase 1: standalone real H8
+    - implement scalar reference
+    - verify exact matrix
+    - implement SIMD batched version
+    - inspect assembly
+
+Phase 2: standalone real H16
+    - implement P/Q butterflies
+    - call two H8 codelets
+    - verify scale states
+    - benchmark against standard H16 WHT
+
+Phase 3: complex batched H16
+    - apply circuit separately to real and imaginary vectors
+    - optimize register schedule
+    - verify no spills
+
+Phase 4: scale-aware twiddles
+    - add scale-class twiddle generation
+    - implement tangent/cotangent selector
+    - verify coefficient ranges
+
+Phase 5: lane4 integration
+    - identify one internal candidate network
+    - replace only that network
+    - retain existing data layout
+    - compare assembly and counters
+
+Phase 6: automatic schedule search
+    - search operation order
+    - minimize peak live vectors
+    - minimize critical path
+    - minimize moves and shuffles
+
+Phase 7: wider-ISA variants
+    - AVX-512
+    - AArch64 NEON
+    - optional SVE.
+
+
+19. Strict theoretical status
+-----------------------------
+
+The scaled H16 circuit described here has:
+
+    60 issued SIMD additions/subtractions
+    plus two lazy half-scale nodes.
+
+In a binary floating-point implementation where those halves are propagated as
+metadata and folded into existing constants, it can be treated as a 60-instruction
+arithmetic kernel.
+
+In the conventional arithmetic model, divisions by two count as arithmetic
+operations:
+
+    60 + 2 = 62.
+
+Therefore this document does not claim a new <=61-operation H16 arithmetic circuit.
+
+A genuine <=61 standard-model circuit would require cross-half reuse or another
+new linear-circuit identity. Such a circuit must be verified symbolically before any
+claim is made.
+
+
+20. Core design rule
+--------------------
+
+The main design rule is:
+
+    Preserve lane4's physical schedule.
+    Use Alman–Rao only for selected addition networks.
+    Use Bernstein scaling only inside paired-twiddle logic.
+    Propagate powers of two as metadata.
+    Fuse all scale correction into existing coefficients or inverse normalization.
+
+This provides the best chance that the lower operation count survives on modern
+SIMD hardware.

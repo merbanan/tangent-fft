@@ -19,4 +19,8 @@ int lane4_sse41_execute(lane4_portable_plan *plan, fft_complex *data);
 int lane4_sse42_execute(lane4_portable_plan *plan, fft_complex *data);
 #endif
 
+#if HAVE_TANGENT_AARCH64_ASM
+int lane4_neon_execute(lane4_portable_plan *plan, fft_complex *data);
+#endif
+
 #endif

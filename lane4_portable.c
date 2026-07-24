@@ -6,7 +6,7 @@
 
 #define LANE4_PI 3.141592653589793238462643383279502884f
 
-#if HAVE_TANGENT_X86_ASM
+#if HAVE_TANGENT_X86_ASM || HAVE_TANGENT_AARCH64_ASM
 _Static_assert(offsetof(lane4_portable_plan, inner_size) == 8,
                "update lane4 assembly plan offsets");
 _Static_assert(offsetof(lane4_portable_plan, inner_levels) == 16,

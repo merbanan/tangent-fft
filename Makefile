@@ -5,29 +5,47 @@ LDFLAGS ?=
 LDLIBS ?= -lm -pthread
 
 TARGET := fft_harness
-CORE_OBJECTS := fft.o ffmpeg_fft.o lane4_portable.o
+CORE_OBJECTS := fft.o ffmpeg_fft.o h16_hybrid.o lane4_portable.o
 OBJECTS := $(CORE_OBJECTS) harness.o
 FFMPEG_LIB := .ffmpeg-build/libavutil/libavutil.a
 NASM ?= nasm
 HOST_ARCH := $(shell uname -m)
+TARGET_TRIPLE ?= $(shell $(CC) -dumpmachine 2>/dev/null)
+AARCH64_CC ?= clang --target=aarch64-linux-gnu
+AARCH64_LD ?= $(shell command -v ld.lld 2>/dev/null)
+QEMU_AARCH64 ?= qemu-aarch64
 
-ifeq ($(HOST_ARCH),x86_64)
+ifneq ($(findstring x86_64,$(TARGET_TRIPLE)),)
 CPPFLAGS += -DHAVE_TANGENT_X86_ASM=1
 LANE4_X86_OBJECTS := lane4_avx.o lane4_avx_fma.o \
 	lane4_avx2.o lane4_fft.o lane4_sse_stage.o lane4_avx_stage.o
 LANE2_X86_OBJECTS := lane2_sse.o lane2_sse_stage.o
 CORE_OBJECTS += tangent_x86_kernel.o tangent_sse_stage.o \
-	$(LANE4_X86_OBJECTS) $(LANE2_X86_OBJECTS) lane8_avx.o lane8_avx_stage.o
+	$(LANE4_X86_OBJECTS) $(LANE2_X86_OBJECTS) lane8_avx.o lane8_avx_stage.o \
+	h16_paired_avx2.o
 OBJECTS += tangent_x86_kernel.o tangent_sse_stage.o \
-	$(LANE4_X86_OBJECTS) $(LANE2_X86_OBJECTS) lane8_avx.o lane8_avx_stage.o
+	$(LANE4_X86_OBJECTS) $(LANE2_X86_OBJECTS) lane8_avx.o lane8_avx_stage.o \
+	h16_paired_avx2.o
 else
 CPPFLAGS += -DHAVE_TANGENT_X86_ASM=0
+endif
+
+ifneq ($(findstring aarch64,$(TARGET_TRIPLE)),)
+CPPFLAGS += -DHAVE_TANGENT_AARCH64_ASM=1
+LANE2_AARCH64_OBJECTS := lane2_neon.o lane2_neon_stage.o \
+	lane4_neon_stage.o
+CORE_OBJECTS += $(LANE2_AARCH64_OBJECTS)
+OBJECTS += $(LANE2_AARCH64_OBJECTS)
+else
+CPPFLAGS += -DHAVE_TANGENT_AARCH64_ASM=0
 endif
 
 CPPFLAGS += -I. -Ithird_party/ffmpeg -I.ffmpeg-build
 
 .PHONY: all clean test bench debug ffmpeg ffmpeg-cycles tangent-cycles \
-	lane2-cycles lane8-profile
+	lane2-cycles lane8-profile aarch64-asm-check aarch64-qemu-test \
+	ffmpeg-aarch64-qemu-test aarch64-instruction-counts \
+	check-aarch64-linker
 .NOTPARALLEL: debug
 
 all: $(TARGET)
@@ -35,8 +53,9 @@ all: $(TARGET)
 $(TARGET): $(OBJECTS) $(FFMPEG_LIB)
 	$(CC) $(LDFLAGS) -o $@ $(OBJECTS) $(FFMPEG_LIB) $(LDLIBS)
 
-fft.o: fft.c fft.h ffmpeg_fft.h tangent_x86_asm.h lane4_fft.h \
-	lane4_portable.h tangent_sse_asm.h lane2_sse.h
+fft.o: fft.c fft.h ffmpeg_fft.h h16_hybrid.h tangent_x86_asm.h lane4_fft.h \
+	lane4_portable.h tangent_sse_asm.h lane2_sse.h lane2_neon.h
+h16_hybrid.o: h16_hybrid.c h16_hybrid.h fft.h
 ffmpeg_fft.o: ffmpeg_fft.c ffmpeg_fft.h fft.h \
 	third_party/ffmpeg/libavutil/tx.h third_party/ffmpeg/libavutil/cpu.h
 harness.o: harness.c fft.h
@@ -47,6 +66,15 @@ lane4_portable.o: lane4_portable.c lane4_portable.h \
 
 lane2_sse.o: lane2_sse.c lane2_sse.h fft.h
 	$(CC) $(CFLAGS) $(CPPFLAGS) -fno-tree-vectorize -c -o $@ $<
+
+lane2_neon.o: lane2_neon.c lane2_neon.h fft.h
+	$(CC) $(CFLAGS) $(CPPFLAGS) -fno-tree-vectorize -c -o $@ $<
+
+lane2_neon_stage.o: lane2_neon_stage.S
+	$(CC) $(CPPFLAGS) -c -o $@ $<
+
+lane4_neon_stage.o: lane4_neon_stage.S
+	$(CC) $(CPPFLAGS) -c -o $@ $<
 
 lane8_avx.o: lane8_avx.c lane8_avx.h lane8_avx_internal.h fft.h
 	$(CC) $(CFLAGS) $(CPPFLAGS) -fno-tree-vectorize -c -o $@ $<
@@ -72,6 +100,9 @@ lane4_avx2.o: lane4_fft.c lane4_fft.h fft.h
 		-DLANE4_BUILD_AVX2=1 -c -o $@ $<
 
 tangent_x86_kernel.o: tangent_x86_kernel.asm
+	$(NASM) -f elf64 -g -F dwarf -o $@ $<
+
+h16_paired_avx2.o: h16_paired_avx2.asm
 	$(NASM) -f elf64 -g -F dwarf -o $@ $<
 
 lane4_avx_stage.o: lane4_avx.asm
@@ -111,6 +142,54 @@ tangent-cycles: analysis/tangent_cycles
 lane2-cycles: analysis/lane2_cycles
 	taskset -c 2 ./analysis/lane2_cycles
 
+aarch64-asm-check:
+	$(AARCH64_CC) -c lane2_neon_stage.S \
+		-o analysis/lane2_neon_stage.aarch64.o
+
+check-aarch64-linker:
+	@test -n "$(AARCH64_LD)" || { \
+		echo "error: ld.lld was not found; set AARCH64_LD"; \
+		exit 1; \
+	}
+
+analysis/lane2_neon_qemu_test: analysis/lane2_neon_qemu_test.c \
+		analysis/freestanding/math.h analysis/freestanding/stddef.h \
+		analysis/freestanding/stdint.h analysis/freestanding/stdlib.h \
+		lane2_neon.c lane2_neon.h lane2_neon_stage.S \
+		lane4_portable.c lane4_portable.h lane4_portable_internal.h \
+		lane4_neon_stage.S fft.h | check-aarch64-linker
+	$(AARCH64_CC) -O2 -std=c11 -Wall -Wextra -Wpedantic \
+		-ffreestanding -fno-stack-protector -nostdlibinc \
+		-DHAVE_TANGENT_AARCH64_ASM=1 -DHAVE_TANGENT_X86_ASM=0 \
+		-Ianalysis/freestanding -I. -nostdlib -static \
+		--ld-path=$(AARCH64_LD) \
+		-Wl,-e,_start -o $@ analysis/lane2_neon_qemu_test.c \
+		lane2_neon.c lane2_neon_stage.S lane4_portable.c \
+		lane4_neon_stage.S
+
+aarch64-qemu-test: analysis/lane2_neon_qemu_test
+	$(QEMU_AARCH64) ./analysis/lane2_neon_qemu_test
+
+analysis/ffmpeg_neon_qemu_test: analysis/ffmpeg_neon_qemu_test.c \
+		analysis/freestanding/stddef.h analysis/freestanding/stdint.h \
+		third_party/ffmpeg/libavutil/aarch64/tx_float_neon.S \
+		third_party/ffmpeg/libavutil/aarch64/asm.S .ffmpeg-build/config.h \
+		| check-aarch64-linker
+	$(AARCH64_CC) -O2 -std=c11 -Wall -Wextra -Wpedantic \
+		-ffreestanding -fno-stack-protector -nostdlibinc \
+		-Ianalysis/freestanding -I. -Ithird_party/ffmpeg -I.ffmpeg-build \
+		-nostdlib -static --ld-path=$(AARCH64_LD) \
+		-Wl,-e,_start -o $@ analysis/ffmpeg_neon_qemu_test.c \
+		third_party/ffmpeg/libavutil/aarch64/tx_float_neon.S
+
+ffmpeg-aarch64-qemu-test: analysis/ffmpeg_neon_qemu_test
+	$(QEMU_AARCH64) ./analysis/ffmpeg_neon_qemu_test
+
+aarch64-instruction-counts:
+	AARCH64_CC="$(AARCH64_CC)" AARCH64_LD="$(AARCH64_LD)" \
+		QEMU_AARCH64="$(QEMU_AARCH64)" \
+		./scripts/count_aarch64_instructions.sh
+
 analysis/x86_tsc.o: analysis/x86_tsc.asm
 	$(NASM) -f elf64 -g -F dwarf -o $@ $<
 
@@ -146,5 +225,10 @@ clean:
 		analysis/tangent_cycles analysis/lane2_cycles \
 		analysis/x86_tsc.o \
 		analysis/lane8_profile \
+		lane2_neon.o lane2_neon_stage.o \
+		lane4_neon_stage.o \
+		analysis/lane2_neon_stage.aarch64.o \
+		analysis/lane2_neon_qemu_test \
+		analysis/ffmpeg_neon_qemu_test \
 		lane4_sse.o lane4_sse2.o \
 		lane4_sse3.o lane4_ssse3.o lane4_sse41.o lane4_sse42.o

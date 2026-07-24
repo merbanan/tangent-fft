@@ -158,17 +158,26 @@ const tab_8pt, align=4
         .float M_SQRT1_2, -M_SQRT1_2, -M_SQRT1_2,  M_SQRT1_2
 endconst
 
-.macro FFT8 e0, e1, o0, o1, \
-            t0=v16, t1=v17, t2=v18, t3=v19, t4=v20, t5=v21, t6=v22
+.macro LOAD_TAB8 dst
+#if defined(__APPLE__)
+        adrp            x5, tab_8pt@PAGE
+        ldr             \dst, [x5, tab_8pt@PAGEOFF]
+#else
+        adrp            x5, tab_8pt
+        ldr             \dst, [x5, :lo12:tab_8pt]
+#endif
+.endm
 
-        movrel          x5, tab_8pt
+.macro FFT8 e0, e1, o0, o1, \
+            t0=v16, t1=v17, t2=v18, t3=v19, t4=v20, t5=v21, t6=v22, \
+            t5q=q21
 
         fsub            \t1\().4s, \e1\().4s, \o1\().4s             // j1234
         fadd            \o1\().4s, \e1\().4s, \o1\().4s             // k1234
         fsub            \t0\().4s, \e0\().4s, \o0\().4s             // r1234
         fadd            \o0\().4s, \e0\().4s, \o0\().4s             // q1234
 
-        ld1             { \t5\().4s }, [x5]
+        LOAD_TAB8       \t5q
 
         ext             \t4\().16b, \o1\().16b, \o1\().16b, #12
         rev64           \t4\().4s,  \t4\().4s
@@ -211,14 +220,12 @@ endconst
 // Identical as FFT8, but does 2 transforms in parallel
 .macro FFT8_X2 e0, e1, o0, o1, e2, e3, o2, o3
 
-        movrel          x5, tab_8pt
-
         fadd            v19.4s, \e3\().4s, \o3\().4s             // k1234
         fadd            v17.4s, \e1\().4s, \o1\().4s             // k1234
         fadd            v18.4s, \e2\().4s, \o2\().4s             // q1234
         fadd            v16.4s, \e0\().4s, \o0\().4s             // q1234
 
-        ld1             { v23.4s }, [x5]
+        LOAD_TAB8       q23
 
         ext             v22.16b, v19.16b, v19.16b, #12
         ext             v21.16b, v17.16b, v17.16b, #12
@@ -301,9 +308,10 @@ endconst
 // 16-point FFT
 // t3, t4, t5, t6 must be sequential
 .macro FFT16 e0, e1, e2, e3, o0, o1, o2, o3, \
-             t0=v16, t1=v17, t2=v18, t3=v19, t4=v20, t5=v21, t6=v22
+             t0=v16, t1=v17, t2=v18, t3=v19, t4=v20, t5=v21, t6=v22, \
+             t5q=q21
 
-        FFT8            \e0, \e1, \e2, \e3, \t0, \t1, \t2, \t3, \t4, \t5, \t6
+        FFT8            \e0, \e1, \e2, \e3, \t0, \t1, \t2, \t3, \t4, \t5, \t6, \t5q
         FFT4_X2         \o0, \o1, \o2, \o3, \t0, \t1, \t2, \t3, \t4, \t5, \t6
 
         movrel          x5, tab_16pt
@@ -1006,7 +1014,7 @@ function ff_tx_fft_sr_\name\()_neon, export=1
         LOAD_INPUT      20, 22, 21, 23, x2, \no_perm, 1
 
         FFT16           v16, v17, v18, v19, v20, v22, v21, v23, \
-                        v24, v25, v26, v27, v28, v29, v30
+                        v24, v25, v26, v27, v28, v29, v30, q29
 
         ld1             { v26.4s, v27.4s }, [x8], x9
         ldp             q24, q25, [x7], #32
@@ -1029,6 +1037,12 @@ function ff_tx_fft_sr_\name\()_neon, export=1
         stp             q2,  q3,  [x1, #32* 8]
         stp             q16, q17, [x1, #32*12]
 
+        // q2/q3 and q16/q17 are dead after the stores above.  Refill them
+        // now so these two independent cache loads overlap the second
+        // combine instead of sitting on the third combine's critical path.
+        ldp             q2,  q3,  [x1, #32*1]
+        ldp             q16, q17, [x1, #32*7]
+
         SR_COMBINE_HALF v4,  v5,  v12, v13, \
                         v6,  v7,  v20, v21, \
                         v24, v25, v26, v27, \
@@ -1039,10 +1053,8 @@ function ff_tx_fft_sr_\name\()_neon, export=1
         stp             q6,  q5,  [x1, #32*10]
         stp             q7,  q13, [x1, #32*14]
 
-        ldp             q2,  q3,  [x1, #32*1]
         ldp             q6,  q7,  [x1, #32*3]
         ldp             q12, q13, [x1, #32*5]
-        ldp             q16, q17, [x1, #32*7]
 
         SR_COMBINE      v2,  v3,  v12, v13, v6,  v16, v7,  v17, \
                         v10, v11, v14, v15, v18, v19, v22, v23, \

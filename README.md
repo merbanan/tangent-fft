@@ -1,6 +1,6 @@
 # Tangent FFT comparison
 
-This repository contains twenty-six single-precision complex FFT benchmark
+This repository contains thirty single-precision complex FFT benchmark
 entries, each supporting forward and normalized inverse transforms:
 
 - iterative radix-2 Cooley–Tukey in C;
@@ -15,12 +15,21 @@ entries, each supporting forward and normalized inverse transforms:
   SSE, SSE2, SSE3, SSSE3, SSE4.1, and SSE4.2 runtime boundaries;
 - `lane2-sse`, a baseline-SSE assembly FFT that packs two complete
   interleaved complex values in each XMM register;
+- `lane2-neon`, an AArch64 NEON assembly port with the same two-complex
+  register geometry and ARM-specific FMA/sign scheduling;
+- `lane4-neon-fused`, the AArch64 fused lane4-SoA split-radix/Stockham
+  kernel with dedicated 16-, 32-, and 64-point leaves;
 - `lane8-avx2-fma`, a handwritten-assembly `N=8M` decomposition with eight
   split-complex residue transforms per YMM pair;
 - `hw-sse-auto`, a measured lane2/lane4 SSE assembly crossover dispatcher;
 - handwritten lane4 assembly kernels for AVX, AVX+FMA, AVX2, and AVX2+FMA;
 - FFmpeg `libavutil` AVTX, built locally from pinned source, in both native
-  auto-dispatch and reproducible SSE4.2-and-below configurations.
+  auto-dispatch and reproducible SSE4.2-and-below configurations;
+- `scaled-h16-hybrid`, an experimental scalar-C FFT that combines the
+  Alman–Rao split-radix uprooting reduction with the investigation's scaled
+  H16 WHT circuit;
+- `scaled-h16-paired-avx2`, which batches four H16 transforms and executes
+  their paired P/Q H8 branches in handwritten AVX2 assembly.
 
 Every algorithm uses `float` samples, coefficients, twiddles, and scale
 factors. All compute the conventional unnormalised transform
@@ -45,6 +54,10 @@ make ffmpeg-cycles
 make tangent-cycles
 make lane2-cycles
 make lane8-profile
+make aarch64-asm-check
+make aarch64-qemu-test
+make ffmpeg-aarch64-qemu-test
+make aarch64-instruction-counts
 ```
 
 The repository includes the pinned FFmpeg source. The build produces a local
@@ -86,6 +99,16 @@ assembly and contains no AVX/VEX instructions. Its implementation and
 measurements are described in
 [`docs/lane2-sse.md`](docs/lane2-sse.md).
 
+The AArch64 `lane2-neon` port uses the same factorization with NEON `REV64`,
+`FMUL`, and `FMLA` products. It carries its selective sign mask across all
+private stages and has a freestanding QEMU correctness target. The code-level
+comparison with FFmpeg NEON and LLVM-MCA estimates are in
+[`docs/lane2-neon.md`](docs/lane2-neon.md).
+
+The fused lane4-SoA layout, Stockham destination writes, and the NEON/SSE/AVX
+16/32/64 leaf families are described in
+[`docs/fused-lane4-soa.md`](docs/fused-lane4-soa.md).
+
 For `N=4M`, every lane4 implementation computes the four length-`M`
 transforms from `x[4m+r]` in parallel. The plain-C implementation makes the
 decomposition explicit. The SSE family uses separate four-float real and
@@ -116,6 +139,9 @@ machine-operation bounds, assembly layout, and measured limits are in
 [`docs/hardware-top-level-fft.md`](docs/hardware-top-level-fft.md).
 Measured top-level candidates that were not retained are recorded in
 [`docs/rejected-top-level-experiments.md`](docs/rejected-top-level-experiments.md).
+The mathematical review, exact H16 integration, validation, and complete
+16-through-8192 benchmark are in
+[`investigation/scaled_h16_review.md`](investigation/scaled_h16_review.md).
 
 ## Tangent implementation structure
 

@@ -37,7 +37,11 @@ typedef enum {
     FFT_LANE8_AVX2_FMA = 23,
     FFT_HW_SSE = 24,
     FFT_FFMPEG_SSE = 25,
-    FFT_ALGORITHM_COUNT = 26
+    FFT_SCALED_H16_HYBRID = 26,
+    FFT_SCALED_H16_PAIRED_AVX2 = 27,
+    FFT_LANE2_NEON = 28,
+    FFT_LANE4_NEON = 29,
+    FFT_ALGORITHM_COUNT = 30
 } fft_algorithm;
 
 typedef struct fft_plan fft_plan;
