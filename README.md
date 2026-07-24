@@ -1,6 +1,6 @@
 # Tangent FFT comparison
 
-This repository contains thirty single-precision complex FFT benchmark
+This repository contains thirty-two single-precision complex FFT benchmark
 entries, each supporting forward and normalized inverse transforms:
 
 - iterative radix-2 Cooley–Tukey in C;
@@ -21,6 +21,10 @@ entries, each supporting forward and normalized inverse transforms:
   kernel with dedicated 16-, 32-, and 64-point leaves;
 - `lane8-avx2-fma`, a handwritten-assembly `N=8M` decomposition with eight
   split-complex residue transforms per YMM pair;
+- `bank8-avx2-fma`, a dual-AoS-bank `N=8M` assembly schedule with shared
+  inner roots and split-radix FFT8 leaves/closure;
+- `banked-avx2-auto`, the measured lane4/bank8 crossover policy for Zen 2,
+  Skylake, and conservative unknown-x86 fallback;
 - `hw-sse-auto`, a measured lane2/lane4 SSE assembly crossover dispatcher;
 - handwritten lane4 assembly kernels for AVX, AVX+FMA, AVX2, and AVX2+FMA;
 - FFmpeg `libavutil` AVTX, built locally from pinned source, in both native
@@ -54,11 +58,14 @@ make ffmpeg-cycles
 make tangent-cycles
 make lane2-cycles
 make lane4-cycles
+make bank8-cycles
+make bank8-mca
 make gather-cycles
 make lane8-profile
 make aarch64-asm-check
 make aarch64-qemu-test
 make ffmpeg-aarch64-qemu-test
+make aarch64-phone-bench
 make aarch64-instruction-counts
 ```
 
@@ -116,6 +123,9 @@ decision, is in
 Repeated measurements on a loaded Intel Skylake i7-6500U, including all raw
 passes and variance summaries, are in
 [`results/intel-i7-6500u/README.md`](results/intel-i7-6500u/README.md).
+Native Cortex-A55 and Cortex-A78 measurements from a Samsung SM-A528B,
+including all raw passes and the reproducible ADB runner, are in
+[`results/android-sm_a528b-runs/README.md`](results/android-sm_a528b-runs/README.md).
 
 The fused lane4-SoA layout, Stockham destination writes, and the NEON/SSE/AVX
 16/32/64 leaf families are described in
@@ -149,6 +159,9 @@ A detailed derivation, execution walkthrough, and literature lineage are in
 The separate lane8 AVX and size-adaptive SSE top-level designs, their local
 machine-operation bounds, assembly layout, and measured limits are in
 [`docs/hardware-top-level-fft.md`](docs/hardware-top-level-fft.md).
+The newer dual-bank layout, split-radix closure, cross-CPU crossover,
+correctness results, and rejected variants are in
+[`docs/bank8-split-closure.md`](docs/bank8-split-closure.md).
 Measured top-level candidates that were not retained are recorded in
 [`docs/rejected-top-level-experiments.md`](docs/rejected-top-level-experiments.md).
 The mathematical review, exact H16 integration, validation, and complete

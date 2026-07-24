@@ -1,0 +1,49 @@
+META_cluster=a55
+META_core=3
+BEFORE_freq_khz=1804800
+BEFORE_cpuss0_mC=33200
+BEFORE_cpuss1_mC=33200
+AArch64 FFT benchmark: N algorithm median_ns minimum_ns iterations
+16 lane2-neon 92 91 524288
+16 lane4-neon-fused 67 67 524288
+16 ffmpeg-neon-natural 92 92 524288
+16 ffmpeg-neon-prepermuted 87 86 524288
+32 lane2-neon 338 337 262144
+32 lane4-neon-fused 254 254 262144
+32 ffmpeg-neon-natural 209 208 262144
+32 ffmpeg-neon-prepermuted 199 198 262144
+64 lane2-neon 695 693 131072
+64 lane4-neon-fused 546 545 131072
+64 ffmpeg-neon-natural 522 521 131072
+64 ffmpeg-neon-prepermuted 501 500 131072
+128 lane2-neon 1730 1727 65536
+128 lane4-neon-fused 1061 1058 65536
+128 ffmpeg-neon-natural 1228 1226 65536
+128 ffmpeg-neon-prepermuted 1185 1183 65536
+256 lane2-neon 3648 3642 32768
+256 lane4-neon-fused 2568 2563 32768
+256 ffmpeg-neon-natural 2879 2874 32768
+256 ffmpeg-neon-prepermuted 2777 2773 32768
+512 lane2-neon 8765 8749 16384
+512 lane4-neon-fused 5491 5484 16384
+512 ffmpeg-neon-natural 6552 6542 16384
+512 ffmpeg-neon-prepermuted 6374 6364 16384
+1024 lane2-neon 19847 19816 8192
+1024 lane4-neon-fused 12942 12922 8192
+1024 ffmpeg-neon-natural 32978 32960 8192
+1024 ffmpeg-neon-prepermuted 14420 14404 8192
+2048 lane2-neon 49184 48484 4096
+2048 lane4-neon-fused 31873 31813 4096
+2048 ffmpeg-neon-natural 49913 49888 4096
+2048 ffmpeg-neon-prepermuted 32984 32953 4096
+4096 lane2-neon 117670 117587 2048
+4096 lane4-neon-fused 85167 85073 2048
+4096 ffmpeg-neon-natural 192029 191903 2048
+4096 ffmpeg-neon-prepermuted 79201 79018 2048
+8192 lane2-neon 290962 290793 1024
+8192 lane4-neon-fused 200310 200185 1024
+8192 ffmpeg-neon-natural 215023 214799 1024
+8192 ffmpeg-neon-prepermuted 178139 177945 1024
+AFTER_freq_khz=1804800
+AFTER_cpuss0_mC=33200
+AFTER_cpuss1_mC=34300

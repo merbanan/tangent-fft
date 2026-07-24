@@ -6,6 +6,7 @@
 #include "lane2_neon.h"
 #endif
 #if HAVE_TANGENT_X86_ASM
+#include "bank8_avx.h"
 #include "lane2_sse.h"
 #include "lane4_fft.h"
 #include "lane8_avx.h"
@@ -107,6 +108,7 @@ struct fft_plan {
     lane4_avx_fma_fft_plan *lane4_avx_fma;
     lane4_avx2_fft_plan *lane4_avx2;
     lane8_avx_plan *lane8_avx;
+    bank8_avx_plan *bank8_avx;
 #endif
     uint32_t *tangent_permutation;
     uint32_t **blocked_permutation;
@@ -128,6 +130,7 @@ struct fft_plan {
     fft_complex *x86_leaf_tables;
     int tangent_x86_asm_available;
     unsigned lane4_cpu_features;
+    int bank8_auto_use_bank8;
 };
 
 enum {
@@ -210,6 +213,20 @@ static unsigned lane4_runtime_features(void)
 #else
     return 0;
 #endif
+}
+
+static int bank8_auto_preferred(size_t n)
+{
+#if HAVE_TANGENT_X86_ASM && defined(__GNUC__) && !defined(__clang__)
+    __builtin_cpu_init();
+    if (__builtin_cpu_is("skylake")) {
+        return n >= 32 && n <= 1024;
+    }
+    if (__builtin_cpu_is("znver2")) {
+        return n == 64 || n == 128 || n == 8192;
+    }
+#endif
+    return n == 64 || n == 128;
 }
 
 static int nearly_equal(float a, float b)
@@ -1047,6 +1064,7 @@ fft_plan *fft_plan_create(size_t n)
     plan->levels = integer_log2(n);
     plan->tangent_x86_asm_available = tangent_x86_runtime_available();
     plan->lane4_cpu_features = lane4_runtime_features();
+    plan->bank8_auto_use_bank8 = bank8_auto_preferred(n);
     if (plan->levels + 2 >= size_bits) {
         fft_plan_destroy(plan);
         return NULL;
@@ -1096,6 +1114,7 @@ fft_plan *fft_plan_create(size_t n)
             plan->lane4 = lane4_fft_plan_create(n);
             if (n >= 32) {
                 plan->lane8_avx = lane8_avx_plan_create(n);
+                plan->bank8_avx = bank8_avx_plan_create(n);
             }
         }
 #endif
@@ -1130,7 +1149,8 @@ fft_plan *fft_plan_create(size_t n)
           (LANE4_CPU_AVX2 | LANE4_CPU_FMA)) ==
              (LANE4_CPU_AVX2 | LANE4_CPU_FMA) &&
          (plan->lane4 == NULL ||
-          (n >= 32 && plan->lane8_avx == NULL))) ||
+          (n >= 32 &&
+           (plan->lane8_avx == NULL || plan->bank8_avx == NULL)))) ||
 #endif
         !create_scale_tables(plan) ||
         !create_transform_tables(plan) ||
@@ -1164,6 +1184,7 @@ void fft_plan_destroy(fft_plan *plan)
     lane4_avx_fma_fft_plan_destroy(plan->lane4_avx_fma);
     lane4_avx2_fft_plan_destroy(plan->lane4_avx2);
     lane8_avx_plan_destroy(plan->lane8_avx);
+    bank8_avx_plan_destroy(plan->bank8_avx);
 #endif
     free_float_table(plan->scale, plan->table_levels);
     free_constant_table(plan->root, plan->table_levels);
@@ -1307,6 +1328,22 @@ int fft_plan_supports(const fft_plan *plan, fft_algorithm algorithm)
 #if HAVE_TANGENT_X86_ASM
         return plan->tangent_x86_asm_available &&
                (plan->n == 16 || plan->lane8_avx != NULL);
+#else
+        return 0;
+#endif
+    }
+    if (algorithm == FFT_BANK8_AVX2_FMA) {
+#if HAVE_TANGENT_X86_ASM
+        return plan->tangent_x86_asm_available &&
+               (plan->n == 16 || plan->bank8_avx != NULL);
+#else
+        return 0;
+#endif
+    }
+    if (algorithm == FFT_BANKED_AVX2_AUTO) {
+#if HAVE_TANGENT_X86_ASM
+        return plan->lane4 != NULL &&
+               (plan->n < 32 || plan->bank8_avx != NULL);
 #else
         return 0;
 #endif
@@ -2634,6 +2671,16 @@ int fft_execute(fft_plan *plan, fft_algorithm algorithm, fft_complex *data)
             return 0;
         }
         return lane8_avx_execute(plan->lane8_avx, data);
+    case FFT_BANK8_AVX2_FMA:
+        if (plan->n == 16) {
+            return lane4_fft_execute(plan->lane4, data);
+        }
+        return bank8_avx_execute(plan->bank8_avx, data);
+    case FFT_BANKED_AVX2_AUTO:
+        if (plan->bank8_auto_use_bank8) {
+            return bank8_avx_execute(plan->bank8_avx, data);
+        }
+        return lane4_fft_execute(plan->lane4, data);
     case FFT_HW_SSE:
         return plan->n <= 64
                    ? lane2_sse_execute(plan->lane2_sse, data)
@@ -2650,6 +2697,8 @@ int fft_execute(fft_plan *plan, fft_algorithm algorithm, fft_complex *data)
     case FFT_LANE4_AVX2:
     case FFT_LANE4_AVX2_FMA:
     case FFT_LANE2_SSE:
+    case FFT_BANK8_AVX2_FMA:
+    case FFT_BANKED_AVX2_AUTO:
         return -1;
 #endif
 #if HAVE_TANGENT_AARCH64_ASM
@@ -2775,6 +2824,10 @@ const char *fft_algorithm_name(fft_algorithm algorithm)
         return "lane2-neon";
     case FFT_LANE4_NEON:
         return "lane4-neon-fused";
+    case FFT_BANK8_AVX2_FMA:
+        return "bank8-avx2-fma";
+    case FFT_BANKED_AVX2_AUTO:
+        return "banked-avx2-auto";
     default:
         return "unknown";
     }
@@ -2789,6 +2842,8 @@ uint64_t fft_theoretical_flops(fft_algorithm algorithm, size_t n)
         algorithm == FFT_LANE2_SSE ||
         algorithm == FFT_LANE2_NEON ||
         algorithm == FFT_LANE4_NEON ||
+        algorithm == FFT_BANK8_AVX2_FMA ||
+        algorithm == FFT_BANKED_AVX2_AUTO ||
         (algorithm >= FFT_LANE4_C &&
          algorithm <= FFT_LANE4_AVX2_FMA)) {
         return 0;

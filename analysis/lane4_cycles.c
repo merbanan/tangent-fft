@@ -53,6 +53,9 @@ int main(int argc, char **argv)
         FFT_LANE4_AVX_FMA,
         FFT_LANE4_AVX2,
         FFT_LANE4_AVX2_FMA,
+        FFT_BANK8_AVX2_FMA,
+        FFT_BANKED_AVX2_AUTO,
+        FFT_LANE8_AVX2_FMA,
         FFT_LANE4_SSE,
         FFT_FFMPEG
     };
